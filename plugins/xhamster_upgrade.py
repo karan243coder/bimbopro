@@ -157,12 +157,14 @@ async def _xh_get(session: aiohttp.ClientSession, url: str, referer=None, try_en
         # Case 1: URL ends with a section name (e.g., /creators/xxx/videos) -> try alternate listing endpoints
         possible_tries = []
         if last_seg in ("videos", "videos-porn", "new-videos", "videos-premium", "popular"):
+            # xHamster mirrors do not expose the same endpoint consistently.
+            # Try the profile root as well as all known listing suffixes.
+            root_url = "/".join(url.rstrip("/").split("/")[:-1])
+            possible_tries.append(root_url)
             alt_list = ["videos", "videos-porn", "new-videos", "popular"]
             for alt_seg in alt_list:
                 if alt_seg != last_seg:
-                    alt_url = url.rstrip("/")
-                    alt_url = "/".join(alt_url.rstrip("/").split("/")[:-1]) + f"/{alt_seg}"
-                    possible_tries.append(alt_url)
+                    possible_tries.append(root_url + f"/{alt_seg}")
         elif len(path_parts) >= 2 and path_parts[-2].lower() in creator_sections:
             # Case 2: URL is profile root (e.g., /creators/xxx, no /videos suffix) -> try all listing endpoints
             username = last_seg
@@ -546,6 +548,21 @@ async def cmd_xh_search(client: Client, m: Message):
     if len(parts) < 2:
         return await m.reply_text("Usage: <code>/xhs search query</code>")
     q = parts[1].strip()
+    # /xhs also accepts a direct public profile/channel/search URL.
+    # Previously a URL was incorrectly encoded as a search query, which
+    # caused the same limited search page to be returned.
+    if is_xhamster(q) and re.match(r"^https?://", q, re.I):
+        clean = q.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+        if RE_CREATOR.search(clean):
+            m_cr = RE_CREATOR.search(clean)
+            username = m_cr.group(1).rstrip("/")
+            sec_m = re.search(r"/(creators|users|pornstars|channels|models|pornstar-channels)/", clean, re.I)
+            section = (sec_m.group(1).lower() if sec_m else "pornstars")
+            if section == "pornstar-channels":
+                section = "channels"
+            url = f"{urlparse(clean).scheme}://{urlparse(clean).netloc}/{section}/{username}/videos"
+            return await _send_listing(client, m, url, title="🔞 Creator Profile")
+        return await _send_listing(client, m, clean, title="🔞 xHamster Listing")
     url = f"https://xhamster46.desi/search/{quote(q)}"
     await _send_listing(client, m, url, title=f"🔞 xHamster Search: {q}")
 
