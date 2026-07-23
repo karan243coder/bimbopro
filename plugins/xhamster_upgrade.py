@@ -790,10 +790,14 @@ def _listing_kbd(token, items, has_next, current_page=1, sort_mode="long"):
         rows.append([InlineKeyboardButton(
             f"▶️ {i}. {title}{dur}", callback_data=f"xh_q::{token}::{i-1}"
         )])
-    # DOWNLOAD ALL button — queue all 10 videos on current page at 720p (default)
+    # Keep page download separate from the persistent full-channel queue.
     rows.append([InlineKeyboardButton(
-        f"⬇️ Download All ({len(page_items)} videos) — BEST",
-        callback_data=f"xh_all::{token}::best"
+        f"⬇️ Download Page ({len(page_items)} videos)",
+        callback_data=f"xh_pageall::{token}::best"
+    )])
+    rows.append([InlineKeyboardButton(
+        "📥 Download Entire Channel — MAX QUALITY",
+        callback_data=f"xh_all::{token}::max"
     )])
     # Navigation
     nav = []
@@ -986,7 +990,7 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
         except Exception: pass
 
 
-@Client.on_callback_query(filters.regex(r"^xh_(q|pg|vid|back|dl|best|album|all|prevpg|sort)::"))
+@Client.on_callback_query(filters.regex(r"^xh_(q|pg|vid|back|dl|best|album|all|pageall|prevpg|sort)::"))
 async def xh_callbacks(client: Client, c: CallbackQuery):
     data = c.data or ""
     parts = data.split("::")
@@ -1026,7 +1030,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
             return
 
         # ---------- DOWNLOAD ALL on current page (BEST available quality per video) ----------
-        if action == "xh_all_legacy":
+        if action == "xh_pageall":
             token = parts[1]
             entry = _LISTING_STORE.get(token)
             if not entry:
