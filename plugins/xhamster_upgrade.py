@@ -27,6 +27,7 @@ import logging
 import html as html_lib
 import zipfile
 import functools
+import gc
 from urllib.parse import urlparse, urljoin, quote, parse_qs
 
 import aiohttp
@@ -973,8 +974,10 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
                 return
             idx = item.get("index", 0) + 1
             title = item.get("title", "Video")
+            current_job = await get_job(job_id)
+            total = len((current_job or {}).get("items", []))
             try:
-                await status_msg.edit_text(f"📥 Full channel queue\n\n🔽 {idx} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}")
+                await status_msg.edit_text(f"📥 Full channel queue\n\n🔽 {idx}/{total} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}\n📋 Total videos: {total}")
             except Exception: pass
             # Reuse the stable existing downloader; quality extraction is per item.
             async with aiohttp.ClientSession() as session:
@@ -988,7 +991,10 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
                 await finish_item(job_id, item["index"], "failed", str(exc))
                 failed += 1
                 logger.exception("xh full queue item failed")
-            await asyncio.sleep(1)
+            # Give ffmpeg/yt-dlp and the allocator time to release memory
+            # before the next maximum-quality job starts.
+            gc.collect()
+            await asyncio.sleep(10)
     except Exception as exc:
         await update_job(job_id, status="paused", last_error=str(exc)[:500])
         logger.exception("xh full queue worker stopped")
