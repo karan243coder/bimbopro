@@ -42,6 +42,7 @@ from utils import (
     safe_filename, user_download_dir, cleanup_dir, humanbytes, run_cmd,
     is_admin, is_premium, rate_limit_check, get_url,
 )
+from database.xhamster_queue import create_job, get_job, claim_next_item, finish_item, update_job, cancel_job, pause_job, resume_job
 from plugins.xhamster_engine import (
     is_xhamster, _extract_window_initials, _clean_xhamster_page_url,
     _base_of, UA, QLABEL, extract as xh_extract, _normalize_html_for_urls,
@@ -920,6 +921,71 @@ async def _xh_fetch_qualities_for_item(item, session: aiohttp.ClientSession):
     return 1080, "", url
 
 
+
+async def _xh_collect_all_pages(start_url, max_videos=1000):
+    """Collect listing pages gradually; never creates one task per video."""
+    found, seen, current = [], set(), start_url
+    async with aiohttp.ClientSession() as session:
+        for _ in range(100):
+            if not current or len(found) >= max_videos:
+                break
+            code, html, final_url = await _xh_get(session, current)
+            if code != 200 or not html:
+                break
+            items, nxt = _extract_search(html, final_url)
+            if RE_CREATOR.search(final_url):
+                _, items, nxt = _extract_profile(html, final_url)
+            for item in items:
+                u = item.get("url")
+                if u and u not in seen:
+                    seen.add(u); found.append(item)
+                    if len(found) >= max_videos: break
+            if not nxt or nxt == current:
+                break
+            current = nxt
+            await asyncio.sleep(0.7)
+    return found
+
+
+async def _xh_full_queue_worker(client, job_id, user, status_msg):
+    """Single-worker queue: download, upload/log, cleanup, then next item."""
+    completed = failed = 0
+    try:
+        while True:
+            job = await get_job(job_id)
+            if not job or job.get("status") in ("cancelled", "paused"):
+                return
+            item = await claim_next_item(job_id)
+            if not item:
+                await update_job(job_id, status="completed")
+                try: await status_msg.edit_text(f"✅ Full channel queue complete\n\nDone: {completed} | Failed: {failed}")
+                except Exception: pass
+                return
+            idx = item.get("index", 0) + 1
+            title = item.get("title", "Video")
+            try:
+                await status_msg.edit_text(f"📥 Full channel queue\n\n🔽 {idx} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}")
+            except Exception: pass
+            # Reuse the stable existing downloader; quality extraction is per item.
+            async with aiohttp.ClientSession() as session:
+                h, m3u8, final_url = await _xh_fetch_qualities_for_item(item, session)
+            prog = await client.send_message(status_msg.chat.id, f"🔽 #{idx} downloading: {title[:60]}")
+            try:
+                await _xh_download_and_upload(client, prog, user, final_url, m3u8, title, h, "video", {"User-Agent": UA, "Referer": final_url, "Origin": _base_of(final_url)})
+                await finish_item(job_id, item["index"], "completed")
+                completed += 1
+            except Exception as exc:
+                await finish_item(job_id, item["index"], "failed", str(exc))
+                failed += 1
+                logger.exception("xh full queue item failed")
+            await asyncio.sleep(1)
+    except Exception as exc:
+        await update_job(job_id, status="paused", last_error=str(exc)[:500])
+        logger.exception("xh full queue worker stopped")
+        try: await status_msg.edit_text(f"⚠️ Queue paused safely\nDone: {completed} | Failed: {failed}\nError: {str(exc)[:300]}")
+        except Exception: pass
+
+
 @Client.on_callback_query(filters.regex(r"^xh_(q|pg|vid|back|dl|best|album|all|prevpg|sort)::"))
 async def xh_callbacks(client: Client, c: CallbackQuery):
     data = c.data or ""
@@ -940,8 +1006,27 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
     except Exception as e:
         logger.warning(f"xh VIP check fail: {e}")
     try:
-        # ---------- DOWNLOAD ALL on current page (BEST available quality per video) ----------
+        # ---------- FULL CHANNEL QUEUE (persistent, one video at a time) ----------
         if action == "xh_all":
+            token = parts[1]
+            entry = _LISTING_STORE.get(token)
+            if not entry:
+                return await _safe_answer(c, "Session expired", show_alert=True)
+            status_msg = await c.message.reply_text("🔎 Collecting channel pages safely...\nMax 1000 videos")
+            try:
+                all_items = await _xh_collect_all_pages(entry.get("current_url") or entry.get("next"), 1000)
+                if not all_items:
+                    return await status_msg.edit_text("❌ No videos found for queue.")
+                job_id = await create_job(c.from_user.id, c.message.chat.id, entry.get("title", "xHamster Channel"), entry.get("current_url", ""), all_items)
+                await status_msg.edit_text(f"✅ Queue created\n\n📋 Videos: {len(all_items)}\n⚡ Mode: 1-by-1\n📦 Max quality\n🔁 Restart-safe queue")
+                asyncio.create_task(_xh_full_queue_worker(client, job_id, c.from_user, status_msg))
+            except Exception as exc:
+                logger.exception("xh full queue create failed")
+                await status_msg.edit_text(f"❌ Queue create failed: <code>{str(exc)[:500]}</code>")
+            return
+
+        # ---------- DOWNLOAD ALL on current page (BEST available quality per video) ----------
+        if action == "xh_all_legacy":
             token = parts[1]
             entry = _LISTING_STORE.get(token)
             if not entry:
