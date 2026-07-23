@@ -44,7 +44,7 @@ from utils import (
 )
 from plugins.xhamster_engine import (
     is_xhamster, _extract_window_initials, _clean_xhamster_page_url,
-    _base_of, UA, QLABEL, extract as xh_extract,
+    _base_of, UA, QLABEL, extract as xh_extract, _normalize_html_for_urls,
 )
 
 
@@ -136,17 +136,22 @@ async def _xh_get(session: aiohttp.ClientSession, url: str, referer=None, try_en
         h["Referer"] = referer
 
     async def _fetch(u):
-        async with session.get(u, headers=h, ssl=False,
-                               timeout=aiohttp.ClientTimeout(total=30),
-                               allow_redirects=True) as r:
-            return r.status, await r.text(), str(r.url)
+        try:
+            async with session.get(u, headers=h, ssl=False,
+                                   timeout=aiohttp.ClientTimeout(total=30),
+                                   allow_redirects=True) as r:
+                return r.status, await r.text(), str(r.url)
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as exc:
+            # A dead mirror/DNS failure must not abort the whole listing.
+            logger.warning("xh fetch failed for %s: %s", u[:140], exc)
+            return 0, "", u
 
     # Normalize URL: strip hash/query for fallback detection
     code, body, final_url = await _fetch(url)
 
     # If we got a non-2xx response on a creator/pornstar/channel/user URL,
     # try adding standard listing suffixes.
-    if try_endpoint_fallback and code >= 400:
+    if try_endpoint_fallback and (code == 0 or code >= 400):
         p = urlparse(url)
         path_parts = [s for s in p.path.rstrip("/").split("/") if s]
         if not path_parts:
