@@ -703,9 +703,14 @@ _LIST_TTL = 1800  # 30 min
 
 
 # ================== LISTING UI (inline keyboard with pages) ==================
-def _listing_kbd(token, items, has_next, current_page=1):
+def _listing_kbd(token, items, has_next, current_page=1, sort_mode="long"):
     rows = []
-    page_items = items[:8]
+    # Sorting controls are kept at the top so users can change order without leaving the listing.
+    rows.append([
+        InlineKeyboardButton("⬇️ Longest first" + (" ✅" if sort_mode == "long" else ""), callback_data=f"xh_sort::{token}::long"),
+        InlineKeyboardButton("⬆️ Shortest first" + (" ✅" if sort_mode == "short" else ""), callback_data=f"xh_sort::{token}::short"),
+    ])
+    page_items = items[:10]
     for i, v in enumerate(page_items, 1):
         title = re.sub(r"\s+", " ", v["title"])[:24]
         dur = f" ⏱{v['duration']}" if v.get("duration") else ""
@@ -713,7 +718,7 @@ def _listing_kbd(token, items, has_next, current_page=1):
         rows.append([InlineKeyboardButton(
             f"▶️ {i}. {title}{dur}", callback_data=f"xh_q::{token}::{i-1}"
         )])
-    # DOWNLOAD ALL button — queue all 8 videos on current page at 720p (default)
+    # DOWNLOAD ALL button — queue all 10 videos on current page at 720p (default)
     rows.append([InlineKeyboardButton(
         f"⬇️ Download All ({len(page_items)} videos) — BEST",
         callback_data=f"xh_all::{token}::best"
@@ -773,11 +778,11 @@ async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞
                 return await msg.edit_text("❌ Koi video nahi mila.")
             token = _store_listing(items, next_page, title=title, current_url=final_url)
             text = f"{title}\n\n📋 {len(items)} videos milay (⏱ longest pehle 🔥). Neeche button se quality chuno:\n"
-            for i, v in enumerate(items[:8], 1):
+            for i, v in enumerate(items[:10], 1):
                 t = re.sub(r"\s+", " ", v["title"])[:35]
                 dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                 text += f"\n{i}. {t}{dur}"
-            await msg.edit_text(text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1))
+            await msg.edit_text(text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long"))
     except Exception as e:
         logger.exception("xh listing")
         await msg.edit_text(f"❌ Error: <code>{e}</code>")
@@ -792,7 +797,7 @@ def _store_listing(items, next_page, title="🔞 xHamster", current_url="", prev
     _LISTING_STORE[token] = {
         "items": items, "next": next_page, "prev": prev_url,
         "ts": time.time(), "title": title, "page": 1,
-        "current_url": current_url,
+        "current_url": current_url, "sort": "long",
     }
     now = time.time()
     for k in [k for k, v in _LISTING_STORE.items() if now - v["ts"] > _LIST_TTL]:
@@ -836,7 +841,7 @@ async def _xh_fetch_qualities_for_item(item, session: aiohttp.ClientSession):
     return 1080, "", url
 
 
-@Client.on_callback_query(filters.regex(r"^xh_(q|pg|vid|back|dl|best|album|all|prevpg)::"))
+@Client.on_callback_query(filters.regex(r"^xh_(q|pg|vid|back|dl|best|album|all|prevpg|sort)::"))
 async def xh_callbacks(client: Client, c: CallbackQuery):
     data = c.data or ""
     parts = data.split("::")
@@ -945,6 +950,29 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
             asyncio.create_task(_auto_delete(status_msg, delay=20))
             return
 
+        # ---------- SORT CURRENT PAGE ----------
+        if action == "xh_sort":
+            token = parts[1]
+            mode = parts[2] if len(parts) > 2 else "long"
+            entry = _LISTING_STORE.get(token)
+            if not entry:
+                return await _safe_answer(c, "Session expired", show_alert=True)
+            if mode not in ("long", "short"):
+                return await _safe_answer(c, "Invalid sort", show_alert=True)
+            entry["sort"] = mode
+            items = list(entry.get("items", []))
+            items.sort(key=lambda v: v.get("duration_sec", 999999), reverse=(mode == "long"))
+            entry["items"] = items
+            page = entry.get("page", 1)
+            title = entry.get("title", "🔞 xHamster")
+            text = f"{title}\n\n📋 Page {page} ({'longest' if mode == 'long' else 'shortest'} first):\n"
+            for i, v in enumerate(items[:10], 1):
+                t = re.sub(r"\s+", " ", v.get("title", "Video"))[:35]
+                dur = f" ⏱{v.get('duration')}" if v.get("duration") else ""
+                text += f"\n{i}. {t}{dur}"
+            await c.message.edit_text(text, reply_markup=_listing_kbd(token, items, bool(entry.get("next")) or bool(entry.get("prev")) or page > 1, page, mode))
+            return await _safe_answer(c, "Sorted")
+
         # ---------- PREV PAGE ----------
         if action == "xh_prevpg":
             token = parts[1]
@@ -963,7 +991,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                     items, np = _extract_search(html, final_url)
                     if RE_CREATOR.search(final_url):
                         _, items, np = _extract_profile(html, final_url)
-                    items = _sort_videos_by_duration(items)
+                    items = sorted(items, key=lambda v: v.get("duration_sec", 999999), reverse=(entry.get("sort", "long") == "long"))
                 if not items:
                     return await _safe_answer(c, "No results", show_alert=True)
                 page = max(1, entry.get("page", 2) - 1)
@@ -976,12 +1004,12 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                 entry["ts"] = time.time()
                 title = entry.get("title", "🔞 xHamster")
                 text = f"{title}\n\n📋 Page {page}:\n"
-                for i, v in enumerate(items[:8], 1):
+                for i, v in enumerate(items[:10], 1):
                     t = re.sub(r"\s+", " ", v["title"])[:35]
                     dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                     text += f"\n{i}. {t}{dur}"
                 entry["page"] = page
-                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np or old_next), page))
+                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np or old_next), page, entry.get("sort", "long")))
                 await _safe_answer(c)
             except Exception as e:
                 logger.exception("xh prevpg"); await _safe_answer(c, f"Err: {e}", show_alert=True)
@@ -1002,7 +1030,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                     items, np = _extract_search(html, final_url)
                     if RE_CREATOR.search(final_url):
                         _, items, np = _extract_profile(html, final_url)
-                    items = _sort_videos_by_duration(items)
+                    items = sorted(items, key=lambda v: v.get("duration_sec", 999999), reverse=(entry.get("sort", "long") == "long"))
                 if not items:
                     return await _safe_answer(c, "No results", show_alert=True)
                 old_page = entry.get("page", 1)
@@ -1015,12 +1043,12 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                 entry["ts"] = time.time()
                 title = entry.get("title", "🔞 xHamster")
                 text = f"{title}\n\n📋 Page {new_page}:\n"
-                for i, v in enumerate(items[:8], 1):
+                for i, v in enumerate(items[:10], 1):
                     t = re.sub(r"\s+", " ", v["title"])[:35]
                     dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                     text += f"\n{i}. {t}{dur}"
                 entry["page"] = new_page
-                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np), current_page=new_page))
+                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np), current_page=new_page, sort_mode=entry.get("sort", "long")))
                 await _safe_answer(c)
             except Exception as e:
                 logger.exception("xh pg")
@@ -1084,13 +1112,13 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
             page = entry.get("page", 1)
             title = entry.get("title", "🔞 xHamster")
             text = f"{title}\n\n📋 Videos{' (Page '+str(page)+')' if page > 1 else ''}:\n"
-            for i, v in enumerate(items[:8], 1):
+            for i, v in enumerate(items[:10], 1):
                 t = re.sub(r"\s+", " ", v["title"])[:35]
                 dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                 text += f"\n{i}. {t}{dur}"
             has_next = bool(entry.get("next"))
             has_prev = bool(entry.get("prev")) or page > 1
-            await c.message.edit_text(text, reply_markup=_listing_kbd(token, items, has_next or has_prev, current_page=page))
+            await c.message.edit_text(text, reply_markup=_listing_kbd(token, items, has_next or has_prev, current_page=page, sort_mode=entry.get("sort", "long")))
             await _safe_answer(c)
 
         elif action == "xh_vid":
