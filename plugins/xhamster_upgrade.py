@@ -286,6 +286,48 @@ async def _download_gallery_images(session: aiohttp.ClientSession, urls, out_dir
 
 
 # ================== VIDEO LIST (profile/creator/search/tag) ==================
+def _discover_next_from_initials(obj, base: str):
+    """Find pagination/load-more URL or cursor in nested window.initials data.
+    This is intentionally conservative: only values under pagination-like keys
+    are accepted, so unrelated CDN URLs are never followed.
+    """
+    url_keys = {"next", "nextpage", "nextpageurl", "nexturl", "next_href", "nexturl",
+                "loadmoreurl", "loadmore_url", "moreurl", "more_url", "href", "url"}
+    container_keys = ("pagination", "paging", "pager", "loadmore", "load_more",
+                      "infinite", "infinite_scroll", "pageinfo", "page_info", "navigation")
+    found = []
+    def walk(node, under=False):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                kl = str(k).replace("-", "_").lower()
+                active = under or kl in container_keys or "pagination" in kl or "loadmore" in kl or "nextpage" in kl
+                if active and isinstance(v, str):
+                    val = html_lib.unescape(v).replace("\\/", "/").strip()
+                    if (kl in url_keys or "next" in kl or "load" in kl or "more" in kl) and (val.startswith("/") or val.startswith("http")):
+                        u = urljoin(base, val)
+                        if u not in found and is_xhamster(u): found.append(u)
+                if isinstance(v, (dict, list)):
+                    walk(v, active)
+        elif isinstance(node, list):
+            for v in node: walk(v, under)
+    walk(obj)
+    return found[0] if found else None
+
+
+def _discover_cursor_endpoint(html: str, base: str):
+    """Fallback for common public load-more endpoint declarations."""
+    text = _normalize_html_for_urls(html)
+    patterns = (
+        r'(?i)(?:loadMoreUrl|load_more_url|nextPageUrl|next_page_url|paginationUrl|pagination_url)\s*["\']?\s*[:=]\s*["\']([^"\']+)',
+        r'(?i)(?:href|url)\s*[=:]\s*["\']([^"\']*(?:page|load-more|loadmore|pagination)[^"\']*)["\']',
+    )
+    for pat in patterns:
+        for m in re.finditer(pat, text):
+            u = urljoin(base, html_lib.unescape(m.group(1)).replace("\\/", "/"))
+            if is_xhamster(u): return u
+    return None
+
+
 def _extract_video_cards(html: str, base: str):
     """Extract list of videos (title, url, duration, thumb) from any listing page."""
     items = []
@@ -397,8 +439,10 @@ def _extract_video_cards(html: str, base: str):
     # Sort videos SHORTEST first (as user requested: long videos baad me, short pehle)
     items = _sort_videos_by_duration(items)
 
-    # Pagination
-    next_page = None
+    # Pagination / load-more. Prefer explicit nested state before HTML links.
+    next_page = _discover_next_from_initials(initials, base) if isinstance(initials, dict) else None
+    if not next_page:
+        next_page = _discover_cursor_endpoint(html, base)
     for a in soup.select("a[rel='next'], a.next, li.next a, a[class*='next'], a.pagination-next, a[aria-label='Next']"):
         href = a.get("href")
         if href:
@@ -516,8 +560,9 @@ def _preferred_mirror(url: str) -> str:
         for m in _XH_MIRRORS:
             if host == m or host.endswith("." + m):
                 return url
-        # Default replace with xhamster46.desi
-        return p._replace(netloc=_XH_MIRRORS[0]).geturl()
+        # Do not silently replace a user-supplied xHamster domain. Different
+        # domains expose different profile pagination; _xh_get handles fallback.
+        return url
     except Exception:
         return url
 
@@ -586,7 +631,7 @@ async def cmd_xh_gallery(client: Client, m: Message):
         async with aiohttp.ClientSession() as s:
             code, html, final_url = await _xh_get(s, url)
             if code != 200:
-                return await msg.edit_text(f"❌ HTTP {code}")
+                return await msg.edit_text(f"❌ xHamster HTTP {code}\n\n🌐 Page: <code>{final_url[:180]}</code>")
             title, imgs = _extract_gallery(html, final_url)
             if not imgs:
                 return await msg.edit_text("❌ Gallery me photos nahi mile (page may be 18+ login wall or blocked).")
@@ -645,7 +690,11 @@ async def cmd_xh_profile(client: Client, m: Message):
         if section in ("pornstar-channels", "channels", "models"):
             section = "channels" if section != "users" else "users"
         # Remove trailing subpath if user sent deep link (e.g., /creators/name/about -> /creators/name/videos)
-        url = f"https://xhamster46.desi/{section}/{username}/videos"
+        # Keep the domain supplied by the user first. _xh_get will try
+        # compatible endpoints and only use mirror fallback after failure.
+        parsed = urlparse(url)
+        host_base = f"{parsed.scheme or 'https'}://{parsed.netloc}" if parsed.netloc else "https://xhamster.com"
+        url = f"{host_base}/{section}/{username}/videos"
     await _send_listing(client, m, url, title="🔞 Creator Profile")
 
 
@@ -792,9 +841,17 @@ async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞
             # Always sort shortest-first
             items = _sort_videos_by_duration(items)
             if not items:
-                return await msg.edit_text("❌ Koi video nahi mila.")
+                return await msg.edit_text(
+                    f"❌ Koi video nahi mila.\n\n"
+                    f"HTTP: <code>{code}</code>\n"
+                    f"Page: <code>{final_url[:180]}</code>\n"
+                    f"Detected: <code>0</code> | Next page: <code>{'yes' if next_page else 'no'}</code>"
+                )
             token = _store_listing(items, next_page, title=title, current_url=final_url)
-            text = f"{title}\n\n📋 {len(items)} videos milay (⏱ longest pehle 🔥). Neeche button se quality chuno:\n"
+            text = (f"{title}\n\n"
+                    f"📋 {len(items)} videos detected\n"
+                    f"🌐 HTTP: {code} | Next page: {'✅' if next_page else '❌'}\n"
+                    f"⏱ Default: longest first\n\n")
             for i, v in enumerate(items[:10], 1):
                 t = re.sub(r"\s+", " ", v["title"])[:35]
                 dur = f" ⏱{v['duration']}" if v.get("duration") else ""
