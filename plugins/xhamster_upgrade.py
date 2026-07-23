@@ -1543,20 +1543,24 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
                         log_w, log_h, log_duration = await get_video_whd(log_file)
                     except Exception:
                         pass
-                if os.path.exists(log_file):
-                    asyncio.create_task(send_log_media(
+                # Upload media before cleanup; a background task could start
+                # after finally() deletes the local file, leaving only the link.
+                for log_idx, log_part in enumerate(parts_to_upload or [final_file], 1):
+                    if not log_part or not os.path.exists(log_part):
+                        continue
+                    await send_log_media(
                         bot=client,
                         user=user,
-                        file_path=log_file,
+                        file_path=log_part,
                         link=webpage_url,
-                        file_name=safe_title,
+                        file_name=f"{safe_title} (part {log_idx})" if total_parts > 1 else safe_title,
                         media_type=mode,
-                        file_size=fsize,
+                        file_size=os.path.getsize(log_part),
                         thumbnail=log_thumb,
                         duration=log_duration,
                         width=log_w,
                         height=log_h,
-                    ))
+                    )
         except Exception as e:
             logger.debug(f"xh log channel schedule err: {e}")
     except Exception as e:
