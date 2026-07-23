@@ -926,12 +926,18 @@ async def _xh_fetch_qualities_for_item(item, session: aiohttp.ClientSession):
 
 
 
-async def _xh_collect_all_pages(start_url, max_videos=1000):
+async def _xh_collect_all_pages(start_url, max_videos=None):
     """Collect listing pages gradually; never creates one task per video."""
     found, seen, current = [], set(), start_url
     async with aiohttp.ClientSession() as session:
-        for _ in range(100):
-            if not current or len(found) >= max_videos:
+        # No video-count cap. The visited URL set and page safety cap prevent
+        # an accidental pagination loop from running forever.
+        visited_pages = set()
+        for _ in range(10000):
+            if not current or current in visited_pages:
+                break
+            visited_pages.add(current)
+            if max_videos is not None and len(found) >= max_videos:
                 break
             code, html, final_url = await _xh_get(session, current)
             if code != 200 or not html:
@@ -943,7 +949,7 @@ async def _xh_collect_all_pages(start_url, max_videos=1000):
                 u = item.get("url")
                 if u and u not in seen:
                     seen.add(u); found.append(item)
-                    if len(found) >= max_videos: break
+                    if max_videos is not None and len(found) >= max_videos: break
             if not nxt or nxt == current:
                 break
             current = nxt
@@ -1016,9 +1022,9 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
             entry = _LISTING_STORE.get(token)
             if not entry:
                 return await _safe_answer(c, "Session expired", show_alert=True)
-            status_msg = await c.message.reply_text("🔎 Collecting channel pages safely...\nMax 1000 videos")
+            status_msg = await c.message.reply_text("🔎 Collecting channel pages safely...\nNo video-count limit")
             try:
-                all_items = await _xh_collect_all_pages(entry.get("current_url") or entry.get("next"), 1000)
+                all_items = await _xh_collect_all_pages(entry.get("current_url") or entry.get("next"), None)
                 if not all_items:
                     return await status_msg.edit_text("❌ No videos found for queue.")
                 job_id = await create_job(c.from_user.id, c.message.chat.id, entry.get("title", "xHamster Channel"), entry.get("current_url", ""), all_items)
