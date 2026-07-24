@@ -182,12 +182,53 @@ def extract(url: str, cookies_file: str = None):
         return None
 
     # --- Step 3: Extract title and duration from main page ---
-    tm = (
-        re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', html, re.I)
-        or re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
-    )
-    if tm:
-        title = re.sub(r"\s+", " ", tm.group(1)).strip()
+    # Priority: JSON-LD > og:title > <title> tag (skip age verification pages)
+    _BAD_TITLES = {"age verification", "eporner age", "access denied", "please verify", "18+"}
+
+    def _title_is_bad(t):
+        if not t:
+            return True
+        tl = t.lower().strip()
+        return any(bad in tl for bad in _BAD_TITLES) or len(tl) < 3
+
+    # Try JSON-LD first (most reliable, works even on age-gate pages)
+    json_ld = re.search(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S)
+    if json_ld:
+        try:
+            ld_data = json.loads(json_ld.group(1))
+            if isinstance(ld_data, dict):
+                title = ld_data.get("name") or title
+        except Exception:
+            pass
+
+    # Then og:title
+    if _title_is_bad(title):
+        og_m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+        if og_m:
+            t = re.sub(r"\s+", " ", og_m.group(1)).strip()
+            if not _title_is_bad(t):
+                title = t
+
+    # Then <title> tag (last resort, skip if it says "age verification")
+    if _title_is_bad(title):
+        tm = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+        if tm:
+            t = re.sub(r"\s+", " ", tm.group(1)).strip()
+            if not _title_is_bad(t):
+                title = t
+
+    # Last resort: build title from URL slug
+    if _title_is_bad(title):
+        try:
+            from urllib.parse import unquote
+            slug = urlparse(desktop).path.rstrip('/').split('/')[-1]
+            if slug:
+                slug = unquote(slug).replace('-', ' ')
+                slug = re.sub(r'\s+', ' ', slug).strip()
+                if slug and len(slug) > 3:
+                    title = slug.title()
+        except Exception:
+            pass
 
     dm = re.search(r'<meta[^>]+property=["\']video:duration["\'][^>]+content=["\'](\d+)["\']', html, re.I)
     if dm:
@@ -209,11 +250,21 @@ def extract(url: str, cookies_file: str = None):
             vid_hash = _find_hash(embed_html)
             if vid_hash:
                 logger.info("eporner: hash found via embed URL: %s", vid_hash[:8] + "...")
-            # Also grab title from embed if missing
-            if not title:
-                tm2 = re.search(r"<title[^>]*>(.*?)</title>", embed_html, re.I | re.S)
-                if tm2:
-                    title = re.sub(r"\s+", " ", tm2.group(1)).strip()
+            # Also grab title from embed if missing or bad
+            if _title_is_bad(title):
+                # Try og:title from embed
+                og_embed = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', embed_html, re.I)
+                if og_embed:
+                    t = re.sub(r"\s+", " ", og_embed.group(1)).strip()
+                    if not _title_is_bad(t):
+                        title = t
+                # Fallback: <title> tag
+                if _title_is_bad(title):
+                    tm2 = re.search(r"<title[^>]*>(.*?)</title>", embed_html, re.I | re.S)
+                    if tm2:
+                        t = re.sub(r"\s+", " ", tm2.group(1)).strip()
+                        if not _title_is_bad(t):
+                            title = t
         except Exception as e:
             logger.warning("eporner: embed fetch fail: %s", e)
 
@@ -227,10 +278,18 @@ def extract(url: str, cookies_file: str = None):
             vid_hash = _find_hash(alt_html)
             if vid_hash:
                 logger.info("eporner: hash found via hd-porn URL: %s", vid_hash[:8] + "...")
-            if not title:
-                tm3 = re.search(r"<title[^>]*>(.*?)</title>", alt_html, re.I | re.S)
-                if tm3:
-                    title = re.sub(r"\s+", " ", tm3.group(1)).strip()
+            if _title_is_bad(title):
+                og_alt = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', alt_html, re.I)
+                if og_alt:
+                    t = re.sub(r"\s+", " ", og_alt.group(1)).strip()
+                    if not _title_is_bad(t):
+                        title = t
+                if _title_is_bad(title):
+                    tm3 = re.search(r"<title[^>]*>(.*?)</title>", alt_html, re.I | re.S)
+                    if tm3:
+                        t = re.sub(r"\s+", " ", tm3.group(1)).strip()
+                        if not _title_is_bad(t):
+                            title = t
                 dm3 = re.search(r'<meta[^>]+property=["\']video:duration["\'][^>]+content=["\'](\d+)["\']', alt_html, re.I)
                 if dm3:
                     try:

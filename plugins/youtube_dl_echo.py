@@ -640,7 +640,24 @@ async def echo(bot, update):
 
     if is_eporner(url):
         from plugins.eporner_upgrade import RE_EP_PROFILE, _send_ep_listing
-        if RE_EP_PROFILE.search(url) or "/pornstar/" in url.lower() or "/tag/" in url.lower() or "/search/" in url.lower():
+        _path = urlparse(url).path.lower()
+        _is_ep_listing = (
+            RE_EP_PROFILE.search(url)
+            or "/pornstar/" in _path
+            or "/tag/" in _path
+            or "/search/" in _path
+            or "/category/" in _path
+            or "/channels/" in _path
+            or "/best" in _path
+            or "/top-rated" in _path
+            or "/cat/" in _path
+        )
+        # Also detect after redirect: /pornstar/name-ID/recent/ etc.
+        if not _is_ep_listing and "/pornstar/" not in _path:
+            # Check if it's a non-video eporner URL (pornstar with ID suffix + tab)
+            if re.search(r'/[a-zA-Z0-9-]+-[a-zA-Z0-9]{4,}/(?:recent|top-rated|longest|shortest|latest)', _path):
+                _is_ep_listing = True
+        if _is_ep_listing:
             try:
                 await imog.delete()
                 await _send_ep_listing(update, url, title="🔞 Eporner Profile / Listing")
@@ -658,9 +675,24 @@ async def echo(bot, update):
 
         if ep and ep.get("qualities"):
             logger.info("eporner custom engine OK: %s qualities=%s", url, [q.get("height") for q in ep.get("qualities", [])])
+            # Safety: replace bad titles (Age Verification etc.) with URL-based title
+            _ep_title = ep.get("title") or "Eporner video"
+            _bad_words = ["age verification", "access denied", "please verify", "eporner age"]
+            if any(bw in _ep_title.lower() for bw in _bad_words) or len(_ep_title.strip()) < 3:
+                try:
+                    from urllib.parse import urlparse, unquote
+                    _slug = urlparse(url).path.rstrip('/').split('/')[-1]
+                    _slug = unquote(_slug).replace('-', ' ').strip()
+                    if _slug and len(_slug) > 3:
+                        _ep_title = _slug.title()
+                    else:
+                        _ep_title = "Eporner video"
+                except Exception:
+                    _ep_title = "Eporner video"
+                logger.info("eporner: replaced bad title with: %s", _ep_title)
             ep_json = {
-                "title": ep.get("title") or "Eporner video",
-                "fulltitle": ep.get("title") or "Eporner video",
+                "title": _ep_title,
+                "fulltitle": _ep_title,
                 "duration": ep.get("duration"),
                 "_eporner": True,
                 "ep_qualities": {str(q["height"]): q["url"] for q in ep["qualities"]},

@@ -237,109 +237,6 @@ async def split_large_file(file_path, max_size_bytes=1900000000, progress_msg=No
             await safe_edit(progress_msg, split_progress_text)
     
     return split_files
-    """
-    Split large file into parts using FFmpeg
-    max_size_bytes: 1.9GB (safe limit for Telegram)
-    Returns list of split file paths
-    """
-    file_size = os.path.getsize(file_path)
-    
-    # If file is smaller than limit, no need to split
-    if file_size <= max_size_bytes:
-        return [file_path]
-    
-    # Calculate number of parts
-    num_parts = math.ceil(file_size / max_size_bytes)
-    part_duration = None
-    
-    # Get total duration for video files
-    try:
-        width, height, duration = await Mdata01(file_path)
-        if duration > 0:
-            part_duration = duration / num_parts
-    except:
-        pass
-    
-    # Create output directory for parts
-    base_name = os.path.splitext(os.path.basename(file_path))[0]
-    ext = os.path.splitext(file_path)[1]
-    output_dir = os.path.join(os.path.dirname(file_path), f"{base_name}_parts")
-    os.makedirs(output_dir, exist_ok=True)
-    
-    split_files = []
-    
-    # Show split progress message
-    if progress_msg:
-        split_start_text = (
-            f"╭━━━〔 ✂️ SPLITTING FILE 〕━━━╮\n"
-            f"┃ 📁 File: {trim_text(base_name, 30)}\n"
-            f"┃ 📦 Size: {humanbytes(file_size)}\n"
-            f"┃ 🔢 Parts: {num_parts}\n"
-            f"┃ 🔄 Status: Starting split...\n"
-            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
-        )
-        await safe_edit(progress_msg, split_start_text)
-    
-    split_start_time = time.time()
-    
-    # Split using FFmpeg
-    for i in range(num_parts):
-        start_time = i * part_duration if part_duration else 0
-        output_file = os.path.join(output_dir, f"{base_name}_part{i+1:02d}{ext}")
-        
-        # Build FFmpeg command
-        if part_duration:
-            # Video file - split by time
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(start_time),
-                "-t", str(part_duration),
-                "-i", file_path,
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
-                output_file
-            ]
-        else:
-            # Non-video file - split by size (using dd command)
-            skip_bytes = i * max_size_bytes
-            cmd = [
-                "dd",
-                f"if={file_path}",
-                f"of={output_file}",
-                f"bs=1M",
-                f"skip={skip_bytes // (1024*1024)}",
-                f"count={max_size_bytes // (1024*1024)}"
-            ]
-        
-        # Execute split command
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        await process.communicate()
-        
-        if os.path.exists(output_file):
-            split_files.append(output_file)
-        
-        # Update progress
-        if progress_msg:
-            elapsed = time.time() - split_start_time
-            percentage = ((i + 1) / num_parts) * 100
-            progress_bar = build_progress_bar(percentage)
-            
-            split_progress_text = (
-                f"╭━━━〔 ✂️ SPLITTING FILE 〕━━━╮\n"
-                f"┃ 📁 File: {trim_text(base_name, 30)}\n"
-                f"┃ {progress_bar} {percentage:.1f}%\n"
-                f"┃ 📦 Part: {i+1}/{num_parts}\n"
-                f"┃ ⏱️ Elapsed: {TimeFormatter(elapsed * 1000)}\n"
-                f"┃ 🔄 Status: Splitting...\n"
-                f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
-            )
-            await safe_edit(progress_msg, split_progress_text)
-    
-    return split_files
 
 
 async def send_log_media(
@@ -592,19 +489,43 @@ async def youtube_dl_call_back(bot, update):
 
     await safe_edit(update.message, build_stage_card(display_name, "Preparing download...", "0 s"))
 
+    # RAM-aware settings: Koyeb 512MB pe high values se OOM crash hota hai
+    _ram_mb = 0
+    try:
+        import psutil
+        _ram_mb = psutil.virtual_memory().total // (1024 * 1024)
+    except Exception:
+        pass
+
+    if _ram_mb > 0 and _ram_mb <= 1024:
+        # Low RAM server (512MB-1GB): conservative settings
+        _concurrent_frags = min(2, Config.YTDLP_CONCURRENT_FRAGMENTS)
+        _buffer_size = "4M"
+        _chunk_size = "4M"
+        logger.info("Low RAM detected (%dMB): frags=%d, buffer=%s, chunk=%s", _ram_mb, _concurrent_frags, _buffer_size, _chunk_size)
+    elif _ram_mb > 1024 and _ram_mb <= 2048:
+        # Medium RAM (1-2GB)
+        _concurrent_frags = min(4, Config.YTDLP_CONCURRENT_FRAGMENTS)
+        _buffer_size = "8M"
+        _chunk_size = "6M"
+    else:
+        # High RAM or unknown: use config values
+        _concurrent_frags = Config.YTDLP_CONCURRENT_FRAGMENTS
+        _buffer_size = "16M"
+        _chunk_size = "10M"
+
     common_ytdlp_args = [
         "yt-dlp", "-c",
         "--no-warnings",
         "--no-check-certificates",
         "--newline",
         "--geo-bypass",
-        # Buffer size for less disk I/O thrash
-        "--buffer-size", "16M",
-        "--http-chunk-size", "10M",
+        "--buffer-size", _buffer_size,
+        "--http-chunk-size", _chunk_size,
         "--retries", "10",
         "--fragment-retries", "10",
         "--retry-sleep", "3",
-        "--concurrent-fragments", str(Config.YTDLP_CONCURRENT_FRAGMENTS),
+        "--concurrent-fragments", str(_concurrent_frags),
         "--throttled-rate", "100K",
         "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     ]
