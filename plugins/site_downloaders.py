@@ -39,6 +39,7 @@ SITE_PATTERNS = {
     "mdisk":     re.compile(r"(mdisk\.me|mdiskdrive|mdisk\.)", re.I),
     "youtu":     re.compile(r"(youtube\.com|youtu\.be|music\.youtube\.com)", re.I),
     "xhamster":  re.compile(r"xhamster", re.I),
+    "eporner":   re.compile(r"eporner", re.I),
 }
 
 
@@ -191,7 +192,7 @@ async def short_download(client: Client, message: Message):
             "instagram": "Instagram", "tiktok": "TikTok", "facebook": "Facebook",
             "twitter": "Twitter/X", "pixeldrain": "Pixeldrain",
             "m3u8": "M3U8 Stream", "gofile": "Gofile", "youtu": "YouTube",
-            "terabox": "Terabox", "xhamster": "xHamster", "direct": "Direct",
+            "terabox": "Terabox", "xhamster": "xHamster", "eporner": "Eporner", "direct": "Direct",
         }.get(site, site)
 
         await msg.edit_text(f"🔍 **Detected:** {site_name}\n📥 Fetching...")

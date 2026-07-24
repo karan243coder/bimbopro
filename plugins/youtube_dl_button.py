@@ -614,6 +614,10 @@ async def youtube_dl_call_back(bot, update):
     xh_headers = response_json.get("xh_headers") if isinstance(response_json, dict) else None
     is_xh_engine = bool(response_json.get("_xhamster")) and bool(xh_qualities)
 
+    ep_qualities = response_json.get("ep_qualities") if isinstance(response_json, dict) else None
+    ep_headers = response_json.get("ep_headers") if isinstance(response_json, dict) else None
+    is_ep_engine = bool(response_json.get("_eporner")) and bool(ep_qualities)
+
     # ---------------------------------------------------------------
     # 🚀 SPEED: Use aria2c as external downloader for non-HLS files
     # ---------------------------------------------------------------
@@ -671,6 +675,43 @@ async def youtube_dl_call_back(bot, update):
                 "--merge-output-format", "mp4",
                 "-o", download_directory,
                 m3u8_url,
+            ]
+    elif is_ep_engine and youtube_dl_format.startswith("ep-"):
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = ep_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in ep_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = ep_qualities.get(str(pick)) if pick is not None else None
+
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Eporner quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+
+        hdr_args = []
+        ref = (ep_headers or {}).get("Referer")
+        org = (ep_headers or {}).get("Origin")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        if org:
+            hdr_args += ["--add-header", f"Origin:{org}"]
+
+        if tg_send_type == "audio":
+            command_to_exec = common_ytdlp_args + hdr_args + [
+                "--prefer-ffmpeg", "--extract-audio",
+                "--audio-format", youtube_dl_ext,
+                "--audio-quality", youtube_dl_format if youtube_dl_format.isdigit() else "192K",
+                "-o", download_directory,
+                video_url,
+            ]
+        else:
+            command_to_exec = common_ytdlp_args + hdr_args + [
+                "-o", download_directory,
+                video_url,
             ]
     elif tg_send_type == "audio":
         command_to_exec = common_ytdlp_args + [

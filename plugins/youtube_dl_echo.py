@@ -22,6 +22,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from helper_funcs.display_progress import humanbytes
 from utils import check_verification, get_token
 from plugins.xhamster_engine import is_xhamster as _xh_is, extract as xh_extract
+from plugins.eporner_engine import is_eporner as _ep_is, extract as ep_extract
 from plugins.terabox_engine import is_terabox as _tb_is, extract as tb_extract
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -62,6 +63,10 @@ HLS_PROTOCOLS = {"m3u8", "m3u8_native"}
 def is_xhamster(url: str) -> bool:
     # asli detection xhamster_engine me hai (saare domains/mirrors)
     return _xh_is(url)
+
+
+def is_eporner(url: str) -> bool:
+    return _ep_is(url)
 
 
 def is_terabox(url: str) -> bool:
@@ -123,6 +128,31 @@ def build_xhamster_keyboard_from_engine(xh, task_id=""):
         inline_keyboard.append([
             InlineKeyboardButton("🎬 Send Video", callback_data=f"video|xh-720|mp4|{task_id}".encode("UTF-8")),
             InlineKeyboardButton("📁 Send File", callback_data=f"file|xh-720|mp4|{task_id}".encode("UTF-8")),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard)
+
+
+def build_eporner_keyboard_from_engine(ep, task_id=""):
+    """Eporner engine qualities se clean buttons banao."""
+    inline_keyboard = []
+    for q in sorted(ep.get("qualities", []), key=lambda x: -int(x["height"])):
+        h = int(q["height"])
+        label = "🎬 " + q.get("label", f"{h}p")
+        cb_video = f"video|ep-{h}|mp4|{task_id}"
+        cb_file = f"file|ep-{h}|mp4|{task_id}"
+        inline_keyboard.append([
+            InlineKeyboardButton(label, callback_data=cb_video.encode("UTF-8")),
+            InlineKeyboardButton("📁 File", callback_data=cb_file.encode("UTF-8")),
+        ])
+    if ep.get("duration") is not None:
+        inline_keyboard.append([
+            InlineKeyboardButton("🎵 MP3 128K", callback_data=f"audio|128k|mp3|{task_id}".encode("UTF-8")),
+            InlineKeyboardButton("🎧 MP3 320K", callback_data=f"audio|320k|mp3|{task_id}".encode("UTF-8")),
+        ])
+    if not inline_keyboard:
+        inline_keyboard.append([
+            InlineKeyboardButton("🎬 Send Video", callback_data=f"video|ep-720|mp4|{task_id}".encode("UTF-8")),
+            InlineKeyboardButton("📁 Send File", callback_data=f"file|ep-720|mp4|{task_id}".encode("UTF-8")),
         ])
     return InlineKeyboardMarkup(inline_keyboard)
 
@@ -602,6 +632,58 @@ async def echo(bot, update):
             "Bot ko yt-dlp wale old error se bachane ke liye maine yahan stop kar diya hai.\n"
             "Please Koyeb logs me <code>xhamster:</code> wali 5-10 lines bhejo, main exact patch kar dunga.\n\n"
             "Tip: same link ko browser me open karke copy fresh link bhejo.",
+            parse_mode=enums.ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return False
+
+
+    if is_eporner(url):
+        try:
+            cookies_path = "cookies.txt" if os.path.exists("cookies.txt") else None
+            loop = asyncio.get_event_loop()
+            ep = await loop.run_in_executor(None, ep_extract, url, cookies_path)
+        except Exception as e:
+            logger.warning(f"eporner engine error: {e}")
+            ep = None
+
+        if ep and ep.get("qualities"):
+            logger.info("eporner custom engine OK: %s qualities=%s", url, [q.get("height") for q in ep.get("qualities", [])])
+            ep_json = {
+                "title": ep.get("title") or "Eporner video",
+                "fulltitle": ep.get("title") or "Eporner video",
+                "duration": ep.get("duration"),
+                "_eporner": True,
+                "ep_qualities": {str(q["height"]): q["url"] for q in ep["qualities"]},
+                "ep_headers": ep.get("headers") or {},
+            }
+            os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+            task_id = generate_task_id(update.from_user.id)
+            save_ytdl_json_path = os.path.join(
+                Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+            with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                json.dump(ep_json, outfile, ensure_ascii=False)
+
+            reply_markup = build_eporner_keyboard_from_engine(ep, task_id)
+            await imog.delete(True)
+            await bot.send_message(
+                chat_id=update.chat.id,
+                text=(
+                    "<b>🎯 Choose quality</b>\n"
+                    "<b>✅ Eporner custom engine active</b>\n\n"
+                    "Send a photo now to set a custom thumbnail.\n"
+                    "Use /delthumbnail to remove a saved thumbnail."
+                ),
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML,
+                reply_to_message_id=update.id,
+            )
+            return
+
+        logger.error("eporner custom engine FAILED, not using yt-dlp info fallback: %s", url)
+        await imog.edit(
+            "<b>❌ Eporner custom engine link parse nahi kar paya.</b>\n\n"
+            "Please check URL or try again.",
             parse_mode=enums.ParseMode.HTML,
             disable_web_page_preview=True,
         )
