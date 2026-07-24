@@ -379,13 +379,8 @@ async def send_log_media(
             f"<b>⏰ Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
-        await bot.send_message(
-            chat_id=Config.BIMBO_LOG_CHANNEL,
-            text=caption,
-            parse_mode=enums.ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-
+        # Media-only logging: do not send a separate text/link message.
+        # The metadata is kept as the media caption below.
         if not os.path.exists(file_path):
             return
 
@@ -395,7 +390,7 @@ async def send_log_media(
             kwargs = {
                 "chat_id": Config.BIMBO_LOG_CHANNEL,
                 "audio": file_path,
-                "caption": "<b>🎵 Audio File</b>",
+                "caption": caption,
                 "parse_mode": enums.ParseMode.HTML,
             }
             if thumb_to_use:
@@ -408,7 +403,7 @@ async def send_log_media(
             kwargs = {
                 "chat_id": Config.BIMBO_LOG_CHANNEL,
                 "video": file_path,
-                "caption": "<b>🎬 Video File</b>",
+                "caption": caption,
                 "parse_mode": enums.ParseMode.HTML,
                 "supports_streaming": True,
             }
@@ -426,7 +421,7 @@ async def send_log_media(
             kwargs = {
                 "chat_id": Config.BIMBO_LOG_CHANNEL,
                 "document": file_path,
-                "caption": "<b>📁 Document File</b>",
+                "caption": caption,
                 "parse_mode": enums.ParseMode.HTML,
             }
             if thumb_to_use:
