@@ -40,6 +40,61 @@ logger = logging.getLogger(__name__)
 # Global store for eporner listings (token -> listing data)
 _EP_STORE = {}
 
+# Global job queue for "Download Entire Profile" feature
+_EP_JOBS = {}
+_JOB_COUNTER = 0
+
+async def create_job(user_id, chat_id, title, url, items):
+    """Create a new download job for entire profile."""
+    global _JOB_COUNTER
+    _JOB_COUNTER += 1
+    job_id = f"ep_job_{_JOB_COUNTER}"
+    _EP_JOBS[job_id] = {
+        "id": job_id,
+        "user_id": user_id,
+        "chat_id": chat_id,
+        "title": title,
+        "url": url,
+        "items": [{"index": i, "url": item.get("url", ""), "title": item.get("title", "Video"), "status": "pending"} for i, item in enumerate(items)],
+        "status": "running",
+        "created": time.time(),
+    }
+    return job_id
+
+async def get_job(job_id):
+    """Get job by ID."""
+    return _EP_JOBS.get(job_id)
+
+async def claim_next_item(job_id):
+    """Get the next pending item from the job."""
+    job = _EP_JOBS.get(job_id)
+    if not job:
+        return None
+    for item in job["items"]:
+        if item["status"] == "pending":
+            item["status"] = "processing"
+            return item
+    return None
+
+async def update_job(job_id, **kwargs):
+    """Update job fields."""
+    job = _EP_JOBS.get(job_id)
+    if job:
+        job.update(kwargs)
+
+async def finish_item(job_id, index, status, error=None):
+    """Mark an item as completed or failed."""
+    job = _EP_JOBS.get(job_id)
+    if not job:
+        return
+    for item in job["items"]:
+        if item["index"] == index:
+            item["status"] = status
+            if error:
+                item["error"] = error
+            break
+
+
 def _cmd(*names):
     names = [n.lower().lstrip("/") for n in names]
     def f(_flt, _client, m: Message):
