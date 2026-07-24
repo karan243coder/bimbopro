@@ -22,7 +22,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from helper_funcs.display_progress import humanbytes
 from utils import check_verification, get_token
 from plugins.xhamster_engine import is_xhamster as _xh_is, extract as xh_extract
-from plugins.eporner_engine import is_eporner as _ep_is, extract as ep_extract
+from plugins.eporner_engine import is_eporner as _ep_is, extract_video as ep_extract
 from plugins.terabox_engine import is_terabox as _tb_is, extract as tb_extract
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
