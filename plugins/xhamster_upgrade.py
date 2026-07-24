@@ -342,7 +342,7 @@ def _extract_video_cards(html: str, base: str):
     initials = _extract_window_initials(html)
     if isinstance(initials, dict):
         for key in ("videosList", "videos", "content", "galleriesList", "listingVideos",
-                    "relatedVideos", "recommendedVideos", "searchResult", "verticalGallery",
+                    "searchResult", "verticalGallery",
                     "ajaxifyVideos", "homeVideosList", "modelVideos", "pornstarVideos",
                     "channelVideos", "newVideos", "topVideos"):
             node = initials.get(key)
@@ -776,7 +776,7 @@ _LIST_TTL = 1800  # 30 min
 
 
 # ================== LISTING UI (inline keyboard with pages) ==================
-def _listing_kbd(token, items, has_next, current_page=1, sort_mode="long"):
+def _listing_kbd(token, items, has_next, current_page=1, sort_mode="long", kind="channel"):
     rows = []
     # Sorting controls are kept at the top so users can change order without leaving the listing.
     rows.append([
@@ -797,7 +797,7 @@ def _listing_kbd(token, items, has_next, current_page=1, sort_mode="long"):
         callback_data=f"xh_pageall::{token}::best"
     )])
     rows.append([InlineKeyboardButton(
-        "📥 Download Entire Channel — MAX QUALITY",
+        f"📥 Download Entire {'Profile' if kind == 'profile' else 'Channel'} — MAX QUALITY",
         callback_data=f"xh_all::{token}::max"
     )])
     # Navigation
@@ -867,7 +867,7 @@ async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞
                 t = re.sub(r"\s+", " ", v["title"])[:35]
                 dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                 text += f"\n{i}. {t}{dur}"
-            await msg.edit_text(text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long"))
+            await msg.edit_text(text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long", kind=_LISTING_STORE[token].get("kind", "channel")))
     except Exception as e:
         logger.exception("xh listing")
         await msg.edit_text(f"❌ Error: <code>{e}</code>")
@@ -883,6 +883,7 @@ def _store_listing(items, next_page, title="🔞 xHamster", current_url="", prev
         "items": items, "next": next_page, "prev": prev_url,
         "ts": time.time(), "title": title, "page": 1,
         "current_url": current_url, "sort": "long",
+        "kind": "profile" if any(x in str(current_url).lower() for x in ("/pornstars/", "/creators/", "/users/", "/models/")) else "channel",
     }
     now = time.time()
     for k in [k for k, v in _LISTING_STORE.items() if now - v["ts"] > _LIST_TTL]:
@@ -1257,7 +1258,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                     dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                     text += f"\n{i}. {t}{dur}"
                 entry["page"] = new_page
-                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np), current_page=new_page, sort_mode=entry.get("sort", "long")))
+                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np), current_page=new_page, sort_mode=entry.get("sort", "long"), kind=entry.get("kind", "channel")))
                 await _safe_answer(c)
             except Exception as e:
                 logger.exception("xh pg")
@@ -1327,7 +1328,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                 text += f"\n{i}. {t}{dur}"
             has_next = bool(entry.get("next"))
             has_prev = bool(entry.get("prev")) or page > 1
-            await c.message.edit_text(text, reply_markup=_listing_kbd(token, items, has_next or has_prev, current_page=page, sort_mode=entry.get("sort", "long")))
+            await c.message.edit_text(text, reply_markup=_listing_kbd(token, items, has_next or has_prev, current_page=page, sort_mode=entry.get("sort", "long"), kind=entry.get("kind", "channel")))
             await _safe_answer(c)
 
         elif action == "xh_vid":
@@ -1793,9 +1794,26 @@ async def _split_large_video(file_path: str, max_size_bytes: int = 1900000000, s
             cmd = ["dd", f"if={file_path}", f"of={out_part}", "bs=1M", f"skip={skip_mb}", f"count={count_mb}"]
 
         proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
+        try:
+            _, err = await asyncio.wait_for(proc.communicate(), timeout=max(600, int(Config.BIMBO_PROCESS_MAX_TIMEOUT)))
+        except asyncio.TimeoutError:
+            try: proc.kill()
+            except Exception: pass
+            await proc.communicate()
+            if os.path.exists(out_part):
+                try: os.remove(out_part)
+                except Exception: pass
+            raise RuntimeError(f"split timeout on part {i + 1}/{num_parts}")
+        if proc.returncode != 0:
+            detail = (err or b"").decode("utf-8", "ignore")[-300:]
+            if os.path.exists(out_part):
+                try: os.remove(out_part)
+                except Exception: pass
+            raise RuntimeError(f"split failed on part {i + 1}/{num_parts}: {detail}")
         if os.path.exists(out_part) and os.path.getsize(out_part) > 1024:
             split_files.append(out_part)
+        else:
+            raise RuntimeError(f"empty split part {i + 1}/{num_parts}")
 
         if status_msg:
             pct = ((i+1)/num_parts)*100
