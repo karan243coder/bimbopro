@@ -53,6 +53,7 @@ ENGINE_ICONS = {
     'direct': '📁Direct',
     'terabox': '📦Terabox',
     'xhamster': '🔞XHams',
+    'eporner': '🔞EPorn',
     'unknown': '❓Unknown'
 }
 
