@@ -141,6 +141,22 @@ def _find_hash(html: str):
     return None
 
 
+def _is_age_gate(html: str) -> bool:
+    """Check if the page is an Eporner Age Verification gate."""
+    if not html:
+        return False
+    return ("Age Verification" in html or "ageVerif" in html[:2000]) and len(html) < 10000
+
+
+def _set_age_cookies(session):
+    """Set age verification cookies to bypass EU age gate."""
+    for domain in [".eporner.com", "www.eporner.com", "de.eporner.com"]:
+        session.cookies.set("EpornerAgeVerified", "1", domain=domain)
+        session.cookies.set("age_verified", "1", domain=domain)
+        session.cookies.set("agreed18", "1", domain=domain)
+    logger.info("eporner: age verification cookies set")
+
+
 def extract(url: str, cookies_file: str = None):
     desktop = _clean_eporner_page_url(url)
     base = _base_of(desktop)
@@ -156,6 +172,7 @@ def extract(url: str, cookies_file: str = None):
 
     session = requests.Session()
     session.headers.update(headers)
+    _set_age_cookies(session)  # Always set age cookies (EU bypass)
 
     # --- Step 1: Extract video ID from URL (always available) ---
     video_id = _get_video_id(desktop)
@@ -399,6 +416,7 @@ def extract_listing(url: str):
     }
     session = requests.Session()
     session.headers.update(headers)
+    _set_age_cookies(session)  # Always set age cookies (EU bypass)
     try:
         # Pre-warm session (Koyeb cloud IPs need cookies from homepage)
         session.get(base + "/", timeout=15)
@@ -407,6 +425,17 @@ def extract_listing(url: str):
             logger.warning("eporner listing: HTTP %s for %s", r.status_code, desktop)
             return [], None, f"HTTP {r.status_code}"
         html = r.text
+        # Check for age gate and retry with additional cookies
+        if _is_age_gate(html):
+            logger.info("eporner listing: age gate detected, retrying with extra cookies")
+            _set_age_cookies(session)
+            session.cookies.set("ep_age_confirm", "1", domain=".eporner.com")
+            session.cookies.set("warning_checkbox", "1", domain=".eporner.com")
+            r = session.get(desktop, timeout=25, allow_redirects=True)
+            html = r.text
+            if _is_age_gate(html):
+                logger.warning("eporner listing: still age gate after retry")
+                return [], None, "age_verification_required"
     except Exception as e:
         logger.warning("eporner listing: fetch error: %s", e)
         return [], None, str(e)
