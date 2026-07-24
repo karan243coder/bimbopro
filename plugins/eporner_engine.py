@@ -108,6 +108,39 @@ def _parse_duration_sec(dur: str) -> int:
     return 999999
 
 
+def _get_video_id(url: str):
+    """Extract video ID from any eporner URL format."""
+    for pat in [r'/(?:hd-porn|embed)/([a-zA-Z0-9]+)', r'/video-([a-zA-Z0-9]+)']:
+        m = re.search(pat, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _find_hash(html: str):
+    """Find 32-char hex hash in page HTML using multiple patterns."""
+    # Priority 1: EP.video.player.hash (most reliable)
+    m = re.search(r'EP\.video\.player\.hash\s*=\s*["\']([\da-f]{32})["\']', html)
+    if m:
+        return m.group(1)
+    # Priority 2: generic hash= or hash: assignment
+    m = re.search(r'hash\s*[:=]\s*["\']([\da-f]{32})["\']', html)
+    if m:
+        # Make sure it's not EP.user.hash (which can be 'false')
+        pos = m.start()
+        before = html[max(0, pos-40):pos]
+        if "user.hash" not in before:
+            return m.group(1)
+    # Priority 3: any standalone 32-hex in a JS context (careful: skip user.hash lines)
+    for m in re.finditer(r'["\']([\da-f]{32})["\']', html):
+        pos = m.start()
+        before = html[max(0, pos-50):pos]
+        if "user.hash" in before or "csrfToken" in before:
+            continue
+        return m.group(1)
+    return None
+
+
 def extract(url: str, cookies_file: str = None):
     desktop = _clean_eporner_page_url(url)
     base = _base_of(desktop)
@@ -123,43 +156,32 @@ def extract(url: str, cookies_file: str = None):
 
     session = requests.Session()
     session.headers.update(headers)
+
+    # --- Step 1: Extract video ID from URL (always available) ---
+    video_id = _get_video_id(desktop)
+
+    # --- Step 2: Fetch main page and try to get hash ---
+    html = ""
+    final_url = desktop
+    title = None
+    duration = None
+
     try:
-        # Pre-warm session by visiting homepage first (bypasses cookie/anti-bot checks)
         session.get(base + "/", timeout=15)
         r = session.get(desktop, timeout=25, allow_redirects=True)
         html = r.text
         final_url = r.url
+        # Try video ID from final URL too (in case of redirect)
+        if not video_id:
+            video_id = _get_video_id(final_url)
     except Exception as e:
         logger.warning("eporner page fetch fail: %s", e)
-        return None
 
-    if not html:
-        logger.warning("eporner: empty html")
-        return None
-
-    m_id = (
-        re.search(r'/(?:hd-porn|embed)/([a-zA-Z0-9]+)', final_url)
-        or re.search(r'/video-([a-zA-Z0-9]+)', final_url)
-        or re.search(r'/(?:hd-porn|embed)/([a-zA-Z0-9]+)', desktop)
-        or re.search(r'/video-([a-zA-Z0-9]+)', desktop)
-    )
-    if not m_id:
+    if not video_id:
         logger.warning("eporner: video id not found in url %s", final_url)
         return None
-    video_id = m_id.group(1)
 
-    m_hash = (
-        re.search(r'EP\.video\.player\.hash\s*=\s*["\']([\da-f]{32})["\']', html)
-        or re.search(r'hash\s*[:=]\s*["\']([\da-f]{32})["\']', html)
-        or re.search(r'["\']([\da-f]{32})["\']', html)
-    )
-    if not m_hash:
-        logger.warning("eporner: hash not found in webpage")
-        return None
-    vid_hash = m_hash.group(1)
-    ch = _calc_hash(vid_hash)
-
-    title = None
+    # --- Step 3: Extract title and duration from main page ---
     tm = (
         re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', html, re.I)
         or re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
@@ -167,13 +189,62 @@ def extract(url: str, cookies_file: str = None):
     if tm:
         title = re.sub(r"\s+", " ", tm.group(1)).strip()
 
-    duration = None
     dm = re.search(r'<meta[^>]+property=["\']video:duration["\'][^>]+content=["\'](\d+)["\']', html, re.I)
     if dm:
         try:
             duration = int(dm.group(1))
         except Exception:
             pass
+
+    # --- Step 4: Find hash — try main page first ---
+    vid_hash = _find_hash(html) if html else None
+
+    # --- Step 5: FALLBACK — try embed URL if hash not found ---
+    if not vid_hash:
+        embed_url = f"{base}/embed/{video_id}/"
+        logger.info("eporner: hash not on main page, trying embed URL: %s", embed_url)
+        try:
+            r_embed = session.get(embed_url, timeout=20, allow_redirects=True)
+            embed_html = r_embed.text
+            vid_hash = _find_hash(embed_html)
+            if vid_hash:
+                logger.info("eporner: hash found via embed URL: %s", vid_hash[:8] + "...")
+            # Also grab title from embed if missing
+            if not title:
+                tm2 = re.search(r"<title[^>]*>(.*?)</title>", embed_html, re.I | re.S)
+                if tm2:
+                    title = re.sub(r"\s+", " ", tm2.group(1)).strip()
+        except Exception as e:
+            logger.warning("eporner: embed fetch fail: %s", e)
+
+    # --- Step 6: FALLBACK — try hd-porn URL format ---
+    if not vid_hash:
+        alt_url = f"{base}/hd-porn/{video_id}/"
+        logger.info("eporner: hash still not found, trying hd-porn URL: %s", alt_url)
+        try:
+            r_alt = session.get(alt_url, timeout=20, allow_redirects=True)
+            alt_html = r_alt.text
+            vid_hash = _find_hash(alt_html)
+            if vid_hash:
+                logger.info("eporner: hash found via hd-porn URL: %s", vid_hash[:8] + "...")
+            if not title:
+                tm3 = re.search(r"<title[^>]*>(.*?)</title>", alt_html, re.I | re.S)
+                if tm3:
+                    title = re.sub(r"\s+", " ", tm3.group(1)).strip()
+                dm3 = re.search(r'<meta[^>]+property=["\']video:duration["\'][^>]+content=["\'](\d+)["\']', alt_html, re.I)
+                if dm3:
+                    try:
+                        duration = int(dm3.group(1))
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning("eporner: hd-porn fetch fail: %s", e)
+
+    if not vid_hash:
+        logger.warning("eporner: hash not found in webpage or embed (video_id=%s)", video_id)
+        return None
+
+    ch = _calc_hash(vid_hash)
 
     api_url = f"{base}/xhr/video/{video_id}"
     api_headers = dict(session.headers)

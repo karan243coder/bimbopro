@@ -626,8 +626,13 @@ async def youtube_dl_call_back(bot, update):
     if Config.BIMBO_HTTP_PROXY != "":
         common_ytdlp_args.extend(["--proxy", Config.BIMBO_HTTP_PROXY])
 
-    if os.path.exists("cookies.txt"):
-        common_ytdlp_args.extend(["--cookies", "cookies.txt"])
+    # Cookies only for non-custom-engine downloads (xhamster/eporner CDN tokens
+    # can conflict with xhamster cookies loaded from cookies.txt)
+    # For custom engines, cookies are added selectively below.
+    _cookies_for_custom_engines = False  # skip cookies for xh/ep engines
+    if not is_xh_engine and not is_ep_engine:
+        if os.path.exists("cookies.txt"):
+            common_ytdlp_args.extend(["--cookies", "cookies.txt"])
 
     # ============================================================
     #  xHamster (apna engine): JSON me xh_qualities hote hain ->
@@ -755,11 +760,14 @@ async def youtube_dl_call_back(bot, update):
     # 🚀 Inject aria2c as external downloader for non-HLS/DASH URLs
     # (m3u8/mpd fragment streams already use --concurrent-fragments;
     #  aria2 external downloader unpe accha kaam nahi karta).
+    # NOTE: xHamster AND Eporner custom engines skip aria2c — their CDN
+    # URLs have time-bound tokens that break with wildcard Referer.
     if Config.YTDLP_USE_ARIA2C:
         u = (youtube_dl_url or "").lower()
         is_fragment_stream = any(k in u for k in ("m3u8", ".mpd", "youtube.com", "youtu.be", "xhamster"))
         # For direct CDN links (like pvvstream pro etc.), add Referer to bypass hotlink
-        if not is_fragment_stream and not is_xh_engine:
+        # IMPORTANT: skip for custom engines (xh and ep) — their CDN URLs have signed tokens
+        if not is_fragment_stream and not is_xh_engine and not is_ep_engine:
             command_to_exec.extend([
                 "--downloader", "aria2c",
                 "--downloader-args", (
@@ -980,6 +988,119 @@ async def youtube_dl_call_back(bot, update):
                     chat_id=update.message.chat.id,
                     message_id=update.message.id,
                     text=f"**ERROR: Download failed ⚠️**\n`{last_error[:650]}\n\nFallback exception: {str(e)[:200]}`",
+                )
+                return
+
+        # Eporner safety fallback: CDN token expired ya network error ho sakta hai,
+        # fresh URL extract karo engine se aur retry karo.
+        elif is_ep_engine:
+            await safe_edit(update.message, build_stage_card(display_name, "Token expired? Re-extracting fresh URL...", TimeFormatter(milliseconds=int((time.time() - download_start_time) * 1000)) or "0 s"))
+            try:
+                try:
+                    _h = int(youtube_dl_format.split("-", 1)[1])
+                except Exception:
+                    _h = 720
+
+                # Re-extract fresh URL from engine (tokens expire after ~2 hours)
+                loop = asyncio.get_event_loop()
+                from plugins.eporner_engine import extract as ep_re_extract
+                fresh_ep = await loop.run_in_executor(None, ep_re_extract, youtube_dl_url, None)
+
+                if not fresh_ep or not fresh_ep.get("qualities"):
+                    asyncio.create_task(clendir(tmp_directory_for_each_user))
+                    await bot.edit_message_text(
+                        chat_id=update.message.chat.id,
+                        message_id=update.message.id,
+                        text=f"**ERROR: Eporner download failed ⚠️**\n`{last_error[:420]}\n\nFresh re-extract bhi fail ho gaya.`",
+                    )
+                    return
+
+                # Find the same height or closest available
+                fresh_url = None
+                for q in fresh_ep["qualities"]:
+                    if int(q["height"]) == _h:
+                        fresh_url = q.get("url", q.get("m3u8"))
+                        break
+                if not fresh_url:
+                    # Pick closest height
+                    avail = sorted(fresh_ep["qualities"], key=lambda q: abs(int(q["height"]) - _h))
+                    if avail:
+                        fresh_url = avail[0].get("url", avail[0].get("m3u8"))
+
+                if not fresh_url:
+                    asyncio.create_task(clendir(tmp_directory_for_each_user))
+                    await bot.edit_message_text(
+                        chat_id=update.message.chat.id,
+                        message_id=update.message.id,
+                        text=f"**ERROR: Eporner fresh URL not found ⚠️**\n`{last_error[:420]}`",
+                    )
+                    return
+
+                # Build retry command with fresh URL
+                ep_fresh_headers = fresh_ep.get("headers", {})
+                hdr_args_fresh = []
+                ref_f = ep_fresh_headers.get("Referer")
+                org_f = ep_fresh_headers.get("Origin")
+                if ref_f:
+                    hdr_args_fresh += ["--add-header", f"Referer:{ref_f}"]
+                if org_f:
+                    hdr_args_fresh += ["--add-header", f"Origin:{org_f}"]
+
+                fallback_cmd = common_ytdlp_args + hdr_args_fresh + [
+                    "-o", download_directory,
+                    fresh_url,
+                ]
+
+                fb = await asyncio.create_subprocess_exec(
+                    *fallback_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                fb_output = ""
+                while True:
+                    line = await fb.stdout.readline()
+                    if not line:
+                        break
+                    decoded_line = line.decode(errors="ignore").strip()
+                    if decoded_line:
+                        fb_output += decoded_line + "\n"
+                    now = time.time()
+                    elapsed_str = TimeFormatter(milliseconds=int((now - download_start_time) * 1000)) or "0 s"
+                    if "[download]" in decoded_line and "%" in decoded_line and now - last_progress_update >= PROGRESS_UPDATE_INTERVAL:
+                        try:
+                            percent_match = re.search(r'(\d+\.?\d*)%', decoded_line)
+                            percentage = float(percent_match.group(1)) if percent_match else 0.0
+                            speed_match = re.search(r'at\s+(.+?)(?:\s+ETA|$)', decoded_line)
+                            speed = speed_match.group(1).strip() if speed_match else "Calculating..."
+                            size_match = re.search(r'of\s+~?\s*([\d\.]+\s*[KMGTP]?i?B)', decoded_line)
+                            total_size = size_match.group(1).strip() if size_match else "Unknown"
+                            eta_match = re.search(r'ETA\s+([0-9:]+)', decoded_line)
+                            eta = eta_match.group(1).strip() if eta_match else "Calculating..."
+                            await safe_edit(update.message, build_download_card(display_name, percentage, speed, total_size, eta, elapsed_str))
+                            last_progress_update = now
+                        except Exception:
+                            pass
+                    elif "[download]" in decoded_line and now - last_progress_update >= 3:
+                        await safe_edit(update.message, build_stage_card(display_name, "Re-downloading with fresh URL...", elapsed_str))
+                        last_progress_update = now
+
+                await fb.wait()
+                if fb.returncode != 0:
+                    fb_last_error = "\n".join(fb_output.strip().splitlines()[-8:]) or "Unknown fallback error"
+                    asyncio.create_task(clendir(tmp_directory_for_each_user))
+                    await bot.edit_message_text(
+                        chat_id=update.message.chat.id,
+                        message_id=update.message.id,
+                        text=f"**ERROR: Eporner download failed ⚠️**\n`Original:\n{last_error[:420]}\n\nRetry:\n{fb_last_error[:420]}`",
+                    )
+                    return
+
+            except Exception as e:
+                asyncio.create_task(clendir(tmp_directory_for_each_user))
+                await bot.edit_message_text(
+                    chat_id=update.message.chat.id,
+                    message_id=update.message.id,
+                    text=f"**ERROR: Eporner download failed ⚠️**\n`{last_error[:650]}\n\nFallback exception: {str(e)[:200]}`",
                 )
                 return
         else:
