@@ -417,28 +417,45 @@ def extract_listing(url: str):
     session = requests.Session()
     session.headers.update(headers)
     _set_age_cookies(session)  # Always set age cookies (EU bypass)
-    try:
-        # Pre-warm session (Koyeb cloud IPs need cookies from homepage)
-        session.get(base + "/", timeout=15)
-        r = session.get(desktop, timeout=25, allow_redirects=True)
-        if r.status_code != 200:
-            logger.warning("eporner listing: HTTP %s for %s", r.status_code, desktop)
-            return [], None, f"HTTP {r.status_code}"
-        html = r.text
-        # Check for age gate and retry with additional cookies
-        if _is_age_gate(html):
-            logger.info("eporner listing: age gate detected, retrying with extra cookies")
-            _set_age_cookies(session)
-            session.cookies.set("ep_age_confirm", "1", domain=".eporner.com")
-            session.cookies.set("warning_checkbox", "1", domain=".eporner.com")
-            r = session.get(desktop, timeout=25, allow_redirects=True)
+    
+    # Try multiple domains in order of preference
+    # Try de.eporner.com first (no EU age gate), then fallback to www
+    domains_to_try = ["https://de.eporner.com", "https://www.eporner.com"]
+    
+    for domain in domains_to_try:
+        try:
+            # Pre-warm session
+            session.get(domain + "/", timeout=15)
+            
+            # Convert URL to this domain
+            parsed = urlparse(desktop)
+            domain_parsed = urlparse(domain)
+            test_url = desktop.replace(f"{parsed.scheme}://{parsed.netloc}", f"{domain_parsed.scheme}://{domain_parsed.netloc}")
+            
+            r = session.get(test_url, timeout=25, allow_redirects=True)
+            if r.status_code != 200:
+                logger.warning("eporner listing: HTTP %s for %s", r.status_code, test_url)
+                continue
+            
             html = r.text
+            
+            # Check for age gate
             if _is_age_gate(html):
-                logger.warning("eporner listing: still age gate after retry")
-                return [], None, "age_verification_required"
-    except Exception as e:
-        logger.warning("eporner listing: fetch error: %s", e)
-        return [], None, str(e)
+                logger.info("eporner listing: age gate detected on %s, trying next domain", domain)
+                continue
+            
+            # Success! Use this domain
+            base = domain
+            desktop = test_url
+            logger.info("eporner listing: using domain %s", domain)
+            break
+            
+        except Exception as e:
+            logger.warning("eporner listing: error with domain %s: %s", domain, e)
+            continue
+    else:
+        # All domains failed
+        return [], None, "age_verification_required"
 
     if not html or len(html) < 1000:
         logger.warning("eporner listing: empty/short HTML (%d chars)", len(html or ""))
