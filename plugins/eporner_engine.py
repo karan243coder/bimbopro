@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-#  Eporner custom engine for Telegram bot (100% Independent)
-#  - Direct XHR API video quality extractor (No yt-dlp dependency)
+#  Eporner custom engine for Telegram bot (100% Bulletproof)
+#  - Session-based pre-warming (visits homepage first for cookies)
+#  - Multi-pattern hash extractor & AJAX XHR headers
 # ============================================================
 
 import re
@@ -114,15 +115,18 @@ def extract(url: str, cookies_file: str = None):
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": desktop,
+        "Referer": base + "/",
         "Origin": base,
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     }
 
     session = requests.Session()
+    session.headers.update(headers)
     try:
-        r = session.get(desktop, headers=headers, timeout=25, allow_redirects=True)
+        # Pre-warm session by visiting homepage first (bypasses cookie/anti-bot checks)
+        session.get(base + "/", timeout=15)
+        r = session.get(desktop, timeout=25, allow_redirects=True)
         html = r.text
         final_url = r.url
     except Exception as e:
@@ -171,10 +175,11 @@ def extract(url: str, cookies_file: str = None):
         except Exception:
             pass
 
-    api_url = f"https://www.eporner.com/xhr/video/{video_id}"
-    api_headers = dict(headers)
+    api_url = f"{base}/xhr/video/{video_id}"
+    api_headers = dict(session.headers)
     api_headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
     api_headers["X-Requested-With"] = "XMLHttpRequest"
+    api_headers["Referer"] = desktop
 
     try:
         api_res = session.get(
@@ -182,7 +187,7 @@ def extract(url: str, cookies_file: str = None):
             params={
                 "hash": ch,
                 "device": "generic",
-                "domain": "www.eporner.com",
+                "domain": urlparse(base).netloc,
                 "fallback": "false",
             },
             headers=api_headers,
@@ -259,12 +264,14 @@ def extract_listing(url: str):
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": desktop,
+        "Referer": base + "/",
         "Origin": base,
     }
     session = requests.Session()
+    session.headers.update(headers)
     try:
-        r = session.get(desktop, headers=headers, timeout=25, allow_redirects=True)
+        session.get(base + "/", timeout=15)
+        r = session.get(desktop, timeout=25, allow_redirects=True)
         if r.status_code != 200:
             return [], None, "HTTP error"
         html = r.text
