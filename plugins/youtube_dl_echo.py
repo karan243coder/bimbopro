@@ -12,7 +12,7 @@ import re
 import aiohttp
 import hashlib
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 from config import Config
 from pyrogram import filters, enums
@@ -679,7 +679,6 @@ async def echo(bot, update):
             _bad_words = ["age verification", "access denied", "please verify", "eporner age"]
             if any(bw in _ep_title.lower() for bw in _bad_words) or len(_ep_title.strip()) < 3:
                 try:
-                    from urllib.parse import urlparse, unquote
                     _slug = urlparse(url).path.rstrip('/').split('/')[-1]
                     _slug = unquote(_slug).replace('-', ' ').strip()
                     if _slug and len(_slug) > 3:
