@@ -108,7 +108,6 @@ def _parse_duration_sec(dur: str) -> int:
 
 
 def extract(url: str, cookies_file: str = None):
-    return extract_video(url, cookies_file)
     desktop = _clean_eporner_page_url(url)
     base = _base_of(desktop)
     headers = {
@@ -255,6 +254,10 @@ def extract(url: str, cookies_file: str = None):
     }
 
 
+def extract_video(url: str, cookies_file: str = None):
+    return extract(url, cookies_file)
+
+
 def extract_listing(url: str):
     desktop = _clean_eporner_page_url(url)
     base = _base_of(desktop)
@@ -279,8 +282,6 @@ def extract_listing(url: str):
     items = []
     seen = set()
 
-    # Find video cards on Eporner listing pages
-    # Usually: <div class="mb"> or similar, or links containing /video-
     for a in soup.select("a[href*='/video-']"):
         href = a.get("href")
         if not href:
@@ -291,7 +292,6 @@ def extract_listing(url: str):
         seen.add(u)
         title = a.get("title") or a.get("aria-label") or ""
         if not title:
-            # check inner img alt or text
             img = a.find("img")
             if img:
                 title = img.get("alt") or img.get("title") or ""
@@ -309,7 +309,6 @@ def extract_listing(url: str):
             thumb = img.get("src") or img.get("data-src") or img.get("data-original") or ""
 
         dur = ""
-        # search nearby duration element
         parent = a.parent
         for _ in range(3):
             if parent is None:
@@ -328,7 +327,6 @@ def extract_listing(url: str):
             "duration_sec": _parse_duration_sec(dur),
         })
 
-    # Pagination: next page link
     next_page = None
     for a in soup.select("a.next, a[rel='next'], .pagination a.ar, a[class*='next']"):
         href = a.get("href")
@@ -337,20 +335,3 @@ def extract_listing(url: str):
             break
 
     return items, next_page, None
-
-
-if __name__ == "__main__":
-    import sys
-    logging.basicConfig(level=logging.INFO)
-    u = sys.argv[1] if len(sys.argv) > 1 else None
-    if not u:
-        print("Usage: python eporner_engine.py <eporner-url>")
-        sys.exit(0)
-    res = extract_video(u)
-    if not res:
-        print("FAIL: kuch nahi mila")
-    else:
-        print("TITLE   :", res["title"])
-        print("DURATION:", res["duration"])
-        for q in res["qualities"]:
-            print(f"  [{q['height']:>5}] {q['label']:14} {q['url'][:100]}")
