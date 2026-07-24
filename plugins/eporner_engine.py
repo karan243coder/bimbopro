@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-#  Eporner custom engine for Telegram bot
-#  - yt-dlp info extractor bypass via Eporner XHR API
-#  - Extracts direct MP4/HLS qualities (240p up to 4K/60fps)
+#  Eporner custom engine for Telegram bot (100% Independent)
+#  - Direct XHR API video quality extractor (No yt-dlp dependency)
 # ============================================================
 
 import re
 import json
 import html as html_lib
 import logging
+import string
 from urllib.parse import urlparse, urljoin, quote
 
 import requests
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
 
 QLABEL = {
@@ -26,7 +26,6 @@ QLABEL = {
     720: "720p (HD)", 1080: "1080p (FHD)", 1440: "1440p (2K)", 2160: "4K UHD",
 }
 
-import string
 
 def _encode_base_n(num, n):
     chars = string.digits + string.ascii_lowercase
@@ -37,6 +36,7 @@ def _encode_base_n(num, n):
         result.append(chars[num % n])
         num //= n
     return "".join(reversed(result))
+
 
 def _calc_hash(s):
     return "".join(_encode_base_n(int(s[lb:lb + 8], 16), 36) for lb in range(0, 32, 8))
@@ -112,10 +112,12 @@ def extract(url: str, cookies_file: str = None):
     base = _base_of(desktop)
     headers = {
         "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": desktop,
         "Origin": base,
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
     }
 
     session = requests.Session()
@@ -170,6 +172,10 @@ def extract(url: str, cookies_file: str = None):
             pass
 
     api_url = f"https://www.eporner.com/xhr/video/{video_id}"
+    api_headers = dict(headers)
+    api_headers["Accept"] = "application/json, text/javascript, */*; q=0.01"
+    api_headers["X-Requested-With"] = "XMLHttpRequest"
+
     try:
         api_res = session.get(
             api_url,
@@ -179,7 +185,7 @@ def extract(url: str, cookies_file: str = None):
                 "domain": "www.eporner.com",
                 "fallback": "false",
             },
-            headers=headers,
+            headers=api_headers,
             timeout=20,
         )
         if api_res.status_code != 200:
@@ -211,22 +217,6 @@ def extract(url: str, cookies_file: str = None):
         hm = re.search(r'(\d{3,4})[pP]', fmt_key)
         h = int(hm.group(1)) if hm else 720
         found_heights.append((h, fmt_key, src))
-
-    hls_sources = sources.get("hls", {})
-    master_hls = None
-    if isinstance(hls_sources, dict):
-        for hk, hd in hls_sources.items():
-            if isinstance(hd, dict) and hd.get("src"):
-                master_hls = hd.get("src")
-                break
-
-    if not found_heights and master_hls:
-        qualities.append({
-            "height": 720,
-            "label": "720p (HD)",
-            "m3u8": master_hls,
-            "url": master_hls,
-        })
 
     found_heights.sort(key=lambda x: x[0], reverse=True)
     seen_h = set()
@@ -278,7 +268,6 @@ def extract_listing(url: str):
         if r.status_code != 200:
             return [], None, "HTTP error"
         html = r.text
-        final_url = r.url
     except Exception as e:
         return [], None, str(e)
 
