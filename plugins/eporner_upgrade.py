@@ -37,6 +37,9 @@ from plugins.eporner_engine import (
 
 logger = logging.getLogger(__name__)
 
+# Global store for eporner listings (token -> listing data)
+_EP_STORE = {}
+
 def _cmd(*names):
     names = [n.lower().lstrip("/") for n in names]
     def f(_flt, _client, m: Message):
