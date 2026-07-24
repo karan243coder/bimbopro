@@ -685,23 +685,29 @@ async def cmd_xh_profile(client: Client, m: Message):
     if not url or not is_xhamster(url):
         return await m.reply_text("Usage: <code>/xhp https://xhamster.com/creators/NAME</code>\n"
                                    "Or /xhp https://xhamster.com/pornstars/NAME or /channels/NAME")
-    # Normalize: extract creator path and add /videos endpoint (auto-fallback in _xh_get handles 404 to videos-porn)
-    # Remove query/hash
-    url = url.split("?")[0].split("#")[0]
+    # Preserve the exact public listing/tab supplied by the user. Only a
+    # bare profile root gets the /videos fallback; /full-length/newest,
+    # /hd, /4k, /popular and query filters must remain intact.
     m_cr = RE_CREATOR.search(url)
     if m_cr:
-        username = m_cr.group(1).rstrip("/")
-        # Determine section (creators/pornstars/channels/users)
-        section_match = re.search(r"/(creators|users|pornstars|channels|models|pornstar-channels)/", url, re.I)
-        section = section_match.group(1).lower() if section_match else "creators"
-        if section in ("pornstar-channels", "channels", "models"):
-            section = "channels" if section != "users" else "users"
-        # Remove trailing subpath if user sent deep link (e.g., /creators/name/about -> /creators/name/videos)
-        # Keep the domain supplied by the user first. _xh_get will try
-        # compatible endpoints and only use mirror fallback after failure.
         parsed = urlparse(url)
+        path_parts = [x for x in parsed.path.strip("/").split("/") if x]
+        section = path_parts[0].lower() if path_parts else "creators"
+        username = path_parts[1] if len(path_parts) > 1 else m_cr.group(1).rstrip("/")
+        if section == "pornstar-channels":
+            section = "channels"
+        elif section == "models":
+            section = "channels"
+        # Keep all supplied subpaths after /section/username.
+        suffix = path_parts[2:]
+        if not suffix:
+            suffix = ["videos"]
         host_base = f"{parsed.scheme or 'https'}://{parsed.netloc}" if parsed.netloc else "https://xhamster.com"
-        url = f"{host_base}/{section}/{username}/videos"
+        url = f"{host_base}/{'/'.join([section, username] + suffix)}"
+        if parsed.query:
+            url += "?" + parsed.query
+        if parsed.fragment:
+            url += "#" + parsed.fragment
     await _send_listing(client, m, url, title="🔞 Creator Profile")
 
 
