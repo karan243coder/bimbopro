@@ -639,6 +639,15 @@ async def echo(bot, update):
 
 
     if is_eporner(url):
+        from plugins.eporner_upgrade import RE_EP_PROFILE, _send_ep_listing
+        if RE_EP_PROFILE.search(url) or "/pornstar/" in url.lower() or "/tag/" in url.lower() or "/search/" in url.lower():
+            try:
+                await imog.delete()
+                await _send_ep_listing(update, url, title="🔞 Eporner Profile / Listing")
+                return False
+            except Exception as _e:
+                logger.warning(f"ep auto-list err: {_e}")
+
         try:
             cookies_path = "cookies.txt" if os.path.exists("cookies.txt") else None
             loop = asyncio.get_event_loop()
