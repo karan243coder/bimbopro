@@ -142,7 +142,11 @@ def extract(url: str, cookies_file: str = None):
         return None
     video_id = m_id.group(1)
 
-    m_hash = re.search(r'hash\s*[:=]\s*["\']([\da-f]{32})["\']', html)
+    m_hash = (
+        re.search(r'EP\.video\.player\.hash\s*=\s*["\']([\da-f]{32})["\']', html)
+        or re.search(r'hash\s*[:=]\s*["\']([\da-f]{32})["\']', html)
+        or re.search(r'["\']([\da-f]{32})["\']', html)
+    )
     if not m_hash:
         logger.warning("eporner: hash not found in webpage")
         return None
