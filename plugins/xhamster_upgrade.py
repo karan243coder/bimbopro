@@ -951,10 +951,25 @@ async def _xh_collect_all_pages(start_url, max_videos=None):
                 if u and u not in seen:
                     seen.add(u); found.append(item)
                     if max_videos is not None and len(found) >= max_videos: break
+            # Some channel pages use numbered URLs (/2, /3, /4...) and
+            # expose no rel=next/cursor. Continue those pages safely.
+            if not nxt:
+                parsed = urlparse(current)
+                parts = [x for x in parsed.path.rstrip("/").split("/") if x]
+                if len(parts) >= 2 and parts[0].lower() in ("channels", "creators", "pornstars", "users", "models"):
+                    # Profile commands may start at /name/videos, while
+                    # numbered channel pages are /name/2, /name/3...
+                    if parts[-1].lower() in ("videos", "videos-porn", "new-videos", "popular"):
+                        parts.pop()
+                    if parts[-1].isdigit():
+                        parts[-1] = str(int(parts[-1]) + 1)
+                    else:
+                        parts.append("2")
+                    nxt = urljoin(f"{parsed.scheme}://{parsed.netloc}", "/" + "/".join(parts))
             if not nxt or nxt == current:
                 break
             current = nxt
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(1.5)
     return found
 
 
@@ -984,9 +999,23 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
                 h, m3u8, final_url = await _xh_fetch_qualities_for_item(item, session)
             prog = await client.send_message(status_msg.chat.id, f"🔽 #{idx} downloading: {title[:60]}")
             try:
-                await _xh_download_and_upload(client, prog, user, final_url, m3u8, title, h, "video", {"User-Agent": UA, "Referer": final_url, "Origin": _base_of(final_url)})
+                # Never allow one stuck yt-dlp/ffmpeg/upload job to block the
+                # entire channel queue. Timeout is configurable through the
+                # existing process-timeout environment variable.
+                await asyncio.wait_for(
+                    _xh_download_and_upload(
+                        client, prog, user, final_url, m3u8, title, h, "video",
+                        {"User-Agent": UA, "Referer": final_url, "Origin": _base_of(final_url)}
+                    ),
+                    timeout=max(300, int(Config.BIMBO_PROCESS_MAX_TIMEOUT))
+                )
                 await finish_item(job_id, item["index"], "completed")
                 completed += 1
+            except asyncio.TimeoutError:
+                msg = f"timeout after {Config.BIMBO_PROCESS_MAX_TIMEOUT}s"
+                await finish_item(job_id, item["index"], "failed", msg)
+                failed += 1
+                logger.error("xh full queue item timeout: %s", title[:100])
             except Exception as exc:
                 await finish_item(job_id, item["index"], "failed", str(exc))
                 failed += 1
