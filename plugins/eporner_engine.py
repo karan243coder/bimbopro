@@ -142,6 +142,7 @@ def extract(url: str, cookies_file: str = None):
         return None
     video_id = m_id.group(1)
 
+    # Robust hash extraction: check EP.video.player.hash or any 32-hex string near hash
     m_hash = (
         re.search(r'EP\.video\.player\.hash\s*=\s*["\']([\da-f]{32})["\']', html)
         or re.search(r'hash\s*[:=]\s*["\']([\da-f]{32})["\']', html)
