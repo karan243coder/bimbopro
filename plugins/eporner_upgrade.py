@@ -213,9 +213,11 @@ async def _send_ep_listing(m: Message, url: str, title: str = "🔞 Eporner"):
     msg = await m.reply_text(f"{title}\n🔍 Loading...")
     try:
         loop = asyncio.get_event_loop()
+        logger.info("ep listing: calling extract_listing for URL: %s", url)
         items, next_page, err = await loop.run_in_executor(None, ep_listing, url)
+        logger.info("ep listing: result items=%d, next=%s, err=%s", len(items), bool(next_page), err)
         if err or not items:
-            return await msg.edit_text(f"❌ No videos found or error: {err or 'unknown'}")
+            return await msg.edit_text(f"❌ No videos found or error: {err or 'unknown'}\n\nURL: <code>{url[:100]}</code>")
         items = sorted(items, key=lambda v: v.get("duration_sec", 999999), reverse=True)
         token = _store_ep_listing(items, next_page, title=title, current_url=url)
         text = f"{title}\n\n📋 {len(items)} videos detected\n⏱ Default: longest first\n\n"

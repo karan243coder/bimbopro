@@ -341,19 +341,70 @@ def extract_listing(url: str):
     session = requests.Session()
     session.headers.update(headers)
     try:
+        # Pre-warm session (Koyeb cloud IPs need cookies from homepage)
         session.get(base + "/", timeout=15)
         r = session.get(desktop, timeout=25, allow_redirects=True)
         if r.status_code != 200:
-            return [], None, "HTTP error"
+            logger.warning("eporner listing: HTTP %s for %s", r.status_code, desktop)
+            return [], None, f"HTTP {r.status_code}"
         html = r.text
     except Exception as e:
+        logger.warning("eporner listing: fetch error: %s", e)
         return [], None, str(e)
+
+    if not html or len(html) < 1000:
+        logger.warning("eporner listing: empty/short HTML (%d chars)", len(html or ""))
+        return [], None, "empty page"
 
     soup = BeautifulSoup(html, "lxml")
     items = []
     seen = set()
 
-    for a in soup.select("a[href*='/video-']"):
+    # Multiple selector strategies (different Eporner page layouts)
+    video_links = soup.select("a[href*='/video-']")
+    if not video_links:
+        video_links = soup.select("a[href*='/hd-porn/']")
+    if not video_links:
+        video_links = soup.select("a[href*='/embed/']")
+    if not video_links:
+        # Last resort: find all <a> tags and filter by href pattern
+        video_links = [a for a in soup.find_all("a", href=True)
+                       if re.search(r'/(?:video-|hd-porn/)[a-zA-Z0-9]', a["href"])]
+
+    logger.info("eporner listing: found %d video links on page (html=%d chars, final_url=%s)",
+                len(video_links), len(html), getattr(r, 'url', '?'))
+
+    # Extract next page URL
+    next_page = None
+    for a in soup.select("a.next, a[rel='next'], .pagination a.ar, a[class*='next']"):
+        href = a.get("href")
+        if href:
+            next_page = urljoin(base, href)
+            break
+
+    # If still nothing, try extracting video URLs from raw HTML (anti-bot pages)
+    if not video_links:
+        raw_urls = re.findall(r'href=["\'](/(?:video-|hd-porn/)[a-zA-Z0-9]+/[^"\']*)["\']', html)
+        if raw_urls:
+            logger.info("eporner listing: fallback found %d URLs from raw HTML", len(raw_urls))
+            for href in raw_urls:
+                u = urljoin(base, href)
+                if u not in seen:
+                    seen.add(u)
+                    slug = urlparse(u).path.rstrip("/").split("/")[-1]
+                    title = slug.replace("-", " ").strip().title() or "Video"
+                    items.append({
+                        "title": title[:120],
+                        "url": u,
+                        "thumb": "",
+                        "duration": "",
+                        "duration_sec": 999999,
+                    })
+            if items:
+                return items, next_page, None
+        logger.warning("eporner listing: NO video links found at all! HTML snippet: %s", html[:500])
+
+    for a in video_links:
         href = a.get("href")
         if not href:
             continue
@@ -381,7 +432,7 @@ def extract_listing(url: str):
 
         dur = ""
         parent = a.parent
-        for _ in range(3):
+        for _ in range(5):
             if parent is None:
                 break
             dur_el = parent.select_one(".duration, .mbtim, [class*='duration']")
@@ -397,12 +448,5 @@ def extract_listing(url: str):
             "duration": dur,
             "duration_sec": _parse_duration_sec(dur),
         })
-
-    next_page = None
-    for a in soup.select("a.next, a[rel='next'], .pagination a.ar, a[class*='next']"):
-        href = a.get("href")
-        if href:
-            next_page = urljoin(base, href)
-            break
 
     return items, next_page, None
