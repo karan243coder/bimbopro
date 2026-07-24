@@ -107,7 +107,8 @@ def _parse_duration_sec(dur: str) -> int:
     return 999999
 
 
-def extract_video(url: str, cookies_file: str = None):
+def extract(url: str, cookies_file: str = None):
+    return extract_video(url, cookies_file)
     desktop = _clean_eporner_page_url(url)
     base = _base_of(desktop)
     headers = {
