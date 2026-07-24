@@ -511,7 +511,6 @@ async def echo(bot, update):
     # ============================================================
     if is_xhamster(url):
         # Sirf single video URLs pe hi apna engine chalao
-        from urllib.parse import urlparse
         _p = urlparse(url).path.lower()
         _is_single_video = ("/videos/" in _p) and not any(
             k in _p for k in ("/creators/", "/users/", "/pornstars/", "/channels/",
