@@ -226,3 +226,9 @@ def is_admin(uid: int) -> bool:
         return int(uid) in Config.BIMBO_ADMIN_IDS
     except Exception:
         return False
+
+# Global download semaphore - shared across all download systems
+# Limits concurrent downloads to prevent OOM on 512MB RAM servers
+import asyncio
+GLOBAL_DOWNLOAD_SEM = asyncio.Semaphore(1)
+
