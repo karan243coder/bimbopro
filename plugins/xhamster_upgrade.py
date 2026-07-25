@@ -905,8 +905,8 @@ async def _safe_answer(c: CallbackQuery, text: str = "", show_alert: bool = Fals
         pass
 
 
-# Concurrency limiter for Download All (max 2 simultaneous downloads on Koyeb free 512MB RAM)
-_XH_DOWNLOAD_SEM = asyncio.Semaphore(2)
+# Concurrency limiter for Download All - uses shared global semaphore
+from utils import GLOBAL_DOWNLOAD_SEM as _XH_DOWNLOAD_SEM
 
 
 async def _xh_fetch_qualities_for_item(item, session: aiohttp.ClientSession):

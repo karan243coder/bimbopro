@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 PROGRESS_UPDATE_INTERVAL = 5
 
+# Import shared download semaphore from utils
+from utils import GLOBAL_DOWNLOAD_SEM as _DOWNLOAD_SEM
+
 
 def escape_html(text):
     return html.escape(str(text or ""), quote=False)
@@ -520,6 +523,7 @@ async def youtube_dl_call_back(bot, update):
         "--no-check-certificates",
         "--newline",
         "--geo-bypass",
+        "--force-ipv4",  # Force IPv4 - Koyeb servers don't support IPv6
         "--buffer-size", _buffer_size,
         "--http-chunk-size", _chunk_size,
         "--retries", "10",
@@ -708,6 +712,9 @@ async def youtube_dl_call_back(bot, update):
 
     download_start_time = time.time()
     
+    # Wait for download slot (prevents resource overload when profile download is running)
+    await _DOWNLOAD_SEM.acquire()
+    logger.info("Download slot acquired (semaphore). Active downloads: %d", 1 - _DOWNLOAD_SEM._value)
     # Register task in unified progress tracker for advanced UI
     from helper_funcs.display_progress import register_task, update_task, set_user_message, update_user_progress, _task_messages
     progress_task_id = f"ytdlp_{update.from_user.id}_{int(time.time())}"
@@ -745,6 +752,7 @@ async def youtube_dl_call_back(bot, update):
         )
     except FileNotFoundError:
         await safe_edit(progress_msg, "**ERROR:** `yt-dlp` install nahi hai. Requirements install/deploy dobara karo.")
+        _DOWNLOAD_SEM.release()
         return
 
     last_progress_update = 0
@@ -902,6 +910,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Download failed ⚠️**\n`Custom engine:\n{last_error[:420]}\n\nFallback:\n{fb_last_error[:420]}`",
                     )
+                    _DOWNLOAD_SEM.release()
                     return
             except Exception as e:
                 asyncio.create_task(clendir(tmp_directory_for_each_user))
@@ -910,6 +919,7 @@ async def youtube_dl_call_back(bot, update):
                     message_id=update.message.id,
                     text=f"**ERROR: Download failed ⚠️**\n`{last_error[:650]}\n\nFallback exception: {str(e)[:200]}`",
                 )
+                _DOWNLOAD_SEM.release()
                 return
 
         # Eporner safety fallback: CDN token expired ya network error ho sakta hai,
@@ -934,6 +944,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Eporner download failed ⚠️**\n`{last_error[:420]}\n\nFresh re-extract bhi fail ho gaya.`",
                     )
+                    _DOWNLOAD_SEM.release()
                     return
 
                 # Find the same height or closest available
@@ -955,6 +966,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Eporner fresh URL not found ⚠️**\n`{last_error[:420]}`",
                     )
+                    _DOWNLOAD_SEM.release()
                     return
 
                 # Build retry command with fresh URL
@@ -1014,6 +1026,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Eporner download failed ⚠️**\n`Original:\n{last_error[:420]}\n\nRetry:\n{fb_last_error[:420]}`",
                     )
+                    _DOWNLOAD_SEM.release()
                     return
 
             except Exception as e:
@@ -1023,6 +1036,7 @@ async def youtube_dl_call_back(bot, update):
                     message_id=update.message.id,
                     text=f"**ERROR: Eporner download failed ⚠️**\n`{last_error[:650]}\n\nFallback exception: {str(e)[:200]}`",
                 )
+                _DOWNLOAD_SEM.release()
                 return
         else:
             asyncio.create_task(clendir(tmp_directory_for_each_user))
@@ -1031,6 +1045,7 @@ async def youtube_dl_call_back(bot, update):
                 message_id=update.message.id,
                 text=f"**ERROR: Download failed ⚠️**\n`{last_error[:900]}`",
             )
+            _DOWNLOAD_SEM.release()
             return
 
     file_size, file_location = await get_flocation(download_directory, youtube_dl_ext)
@@ -1038,6 +1053,7 @@ async def youtube_dl_call_back(bot, update):
     if file_size == 0:
         await safe_edit(progress_msg, "ERROR: File not found 🙁")
         asyncio.create_task(clendir(tmp_directory_for_each_user))
+        _DOWNLOAD_SEM.release()
         return
 
     # CHECK IF FILE NEEDS SPLITTING (>1.9GB)
@@ -1061,6 +1077,7 @@ async def youtube_dl_call_back(bot, update):
         if not split_files or len(split_files) == 0:
             await safe_edit(progress_msg, "❌ ERROR: Failed to split file")
             asyncio.create_task(clendir(tmp_directory_for_each_user))
+            _DOWNLOAD_SEM.release()
             return
         
         # Show split complete message
@@ -1202,12 +1219,14 @@ async def youtube_dl_call_back(bot, update):
             
             # Cleanup
             asyncio.create_task(clendir(tmp_directory_for_each_user))
+            _DOWNLOAD_SEM.release()
             return
             
         except Exception as e:
             logger.error(f"Split upload error: {e}")
             await safe_edit(progress_msg, f"❌ ERROR: {str(e)[:200]}")
             asyncio.create_task(clendir(tmp_directory_for_each_user))
+            _DOWNLOAD_SEM.release()
             return
 
     # Convert download message to upload message (reuse same message)
@@ -1430,6 +1449,7 @@ async def youtube_dl_call_back(bot, update):
                                        "message is not modified", "MESSAGE_NOT_MODIFIED",
                                        "MESSAGE_EMPTY", "query is too old")):
             logger.info(f"Skipping edit (msg gone): {err_str[:100]}")
+            _DOWNLOAD_SEM.release()
             return
         try:
             await bot.edit_message_text(
@@ -1440,6 +1460,13 @@ async def youtube_dl_call_back(bot, update):
             )
         except Exception as e2:
             logger.warning(f"Could not edit error message: {e2}")
+    
+    # Release download semaphore
+    try:
+        _DOWNLOAD_SEM.release()
+        logger.info("Download slot released")
+    except ValueError:
+        pass  # Already released
 
 
 
