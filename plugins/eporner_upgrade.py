@@ -427,9 +427,9 @@ async def ep_callbacks(client: Client, c: CallbackQuery):
                 logger.exception(f"ep all prefetch err: {e}")
 
                 from plugins.xhamster_upgrade import _xh_download_and_upload
-                from utils import GLOBAL_DOWNLOAD_SEM as _XH_DOWNLOAD_SEM
+                # Semaphore removed
             async def _run_one(job):
-                async with _XH_DOWNLOAD_SEM:
+                if True:  # Semaphore removed
                     item = job["item"]
                     title = item.get("title", "Video")
                     i = job["idx"]

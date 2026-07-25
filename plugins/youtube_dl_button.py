@@ -28,7 +28,21 @@ logger = logging.getLogger(__name__)
 PROGRESS_UPDATE_INTERVAL = 5
 
 # Import shared download semaphore from utils
-from utils import GLOBAL_DOWNLOAD_SEM as _DOWNLOAD_SEM
+# Semaphore removed - using background tasks instead
+
+
+async def safe_send_media(func, *args, **kwargs):
+    """Wrapper to handle Telegram FloodWait errors gracefully."""
+    from pyrogram.errors import FloodWait
+    import asyncio
+    
+    try:
+        return await func(*args, **kwargs)
+    except FloodWait as e:
+        wait_time = min(e.value, 3600)  # Max 1 hour wait
+        logger.warning(f"FloodWait: Waiting {wait_time}s before retry...")
+        await asyncio.sleep(wait_time)
+        return await func(*args, **kwargs)
 
 
 def escape_html(text):
@@ -297,7 +311,7 @@ async def send_log_media(
                 kwargs["thumb"] = thumb_to_use
             if duration and duration > 0:
                 kwargs["duration"] = duration
-            await bot.send_audio(**kwargs)
+            await safe_send_media(bot.send_audio, **kwargs)
 
         elif media_type == "video":
             kwargs = {
@@ -315,7 +329,7 @@ async def send_log_media(
                 kwargs["width"] = width
             if height and height > 0:
                 kwargs["height"] = height
-            await bot.send_video(**kwargs)
+            await safe_send_media(bot.send_video, **kwargs)
 
         else:
             kwargs = {
@@ -326,7 +340,7 @@ async def send_log_media(
             }
             if thumb_to_use:
                 kwargs["thumb"] = thumb_to_use
-            await bot.send_document(**kwargs)
+            await safe_send_media(bot.send_document, **kwargs)
 
     except Exception as e:
         logger.error(f"Log channel media error: {e}")
@@ -728,8 +742,8 @@ async def youtube_dl_call_back(bot, update):
     download_start_time = time.time()
     
     # Wait for download slot (prevents resource overload when profile download is running)
-    await _DOWNLOAD_SEM.acquire()
-    logger.info("Download slot acquired (semaphore). Active downloads: %d", 1 - _DOWNLOAD_SEM._value)
+    # Semaphore removed - running as background task
+    logger.info("Starting download task for user %s", update.from_user.id)
     # Register task in unified progress tracker for advanced UI
     from helper_funcs.display_progress import register_task, update_task, set_user_message, update_user_progress, _task_messages
     progress_task_id = f"ytdlp_{update.from_user.id}_{int(time.time())}"
@@ -767,7 +781,7 @@ async def youtube_dl_call_back(bot, update):
         )
     except FileNotFoundError:
         await safe_edit(progress_msg, "**ERROR:** `yt-dlp` install nahi hai. Requirements install/deploy dobara karo.")
-        _DOWNLOAD_SEM.release()
+        # Semaphore release removed
         return
 
     last_progress_update = 0
@@ -925,7 +939,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Download failed ⚠️**\n`Custom engine:\n{last_error[:420]}\n\nFallback:\n{fb_last_error[:420]}`",
                     )
-                    _DOWNLOAD_SEM.release()
+                    # Semaphore release removed
                     return
             except Exception as e:
                 asyncio.create_task(clendir(tmp_directory_for_each_user))
@@ -934,7 +948,7 @@ async def youtube_dl_call_back(bot, update):
                     message_id=update.message.id,
                     text=f"**ERROR: Download failed ⚠️**\n`{last_error[:650]}\n\nFallback exception: {str(e)[:200]}`",
                 )
-                _DOWNLOAD_SEM.release()
+                # Semaphore release removed
                 return
 
         # Eporner safety fallback: CDN token expired ya network error ho sakta hai,
@@ -959,7 +973,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Eporner download failed ⚠️**\n`{last_error[:420]}\n\nFresh re-extract bhi fail ho gaya.`",
                     )
-                    _DOWNLOAD_SEM.release()
+                    # Semaphore release removed
                     return
 
                 # Find the same height or closest available
@@ -992,7 +1006,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Eporner fresh URL not found ⚠️**\n`{last_error[:420]}`",
                     )
-                    _DOWNLOAD_SEM.release()
+                    # Semaphore release removed
                     return
 
                 # Build retry command with fresh URL
@@ -1065,7 +1079,7 @@ async def youtube_dl_call_back(bot, update):
                         message_id=update.message.id,
                         text=f"**ERROR: Eporner download failed ⚠️**\n`Original:\n{last_error[:420]}\n\nRetry:\n{fb_last_error[:420]}`",
                     )
-                    _DOWNLOAD_SEM.release()
+                    # Semaphore release removed
                     return
 
             except Exception as e:
@@ -1075,7 +1089,7 @@ async def youtube_dl_call_back(bot, update):
                     message_id=update.message.id,
                     text=f"**ERROR: Eporner download failed ⚠️**\n`{last_error[:650]}\n\nFallback exception: {str(e)[:200]}`",
                 )
-                _DOWNLOAD_SEM.release()
+                # Semaphore release removed
                 return
         else:
             asyncio.create_task(clendir(tmp_directory_for_each_user))
@@ -1084,7 +1098,7 @@ async def youtube_dl_call_back(bot, update):
                 message_id=update.message.id,
                 text=f"**ERROR: Download failed ⚠️**\n`{last_error[:900]}`",
             )
-            _DOWNLOAD_SEM.release()
+            # Semaphore release removed
             return
 
     file_size, file_location = await get_flocation(download_directory, youtube_dl_ext)
@@ -1092,7 +1106,7 @@ async def youtube_dl_call_back(bot, update):
     if file_size == 0:
         await safe_edit(progress_msg, "ERROR: File not found 🙁")
         asyncio.create_task(clendir(tmp_directory_for_each_user))
-        _DOWNLOAD_SEM.release()
+        # Semaphore release removed
         return
 
     # CHECK IF FILE NEEDS SPLITTING (>1.9GB)
@@ -1116,7 +1130,7 @@ async def youtube_dl_call_back(bot, update):
         if not split_files or len(split_files) == 0:
             await safe_edit(progress_msg, "❌ ERROR: Failed to split file")
             asyncio.create_task(clendir(tmp_directory_for_each_user))
-            _DOWNLOAD_SEM.release()
+            # Semaphore release removed
             return
         
         # Show split complete message
@@ -1183,7 +1197,8 @@ async def youtube_dl_call_back(bot, update):
                     except:
                         width, height, duration = 0, 0, 0
                     
-                    uploaded_msg = await bot.send_video(
+                    uploaded_msg = await safe_send_media(
+                        bot.send_video,
                         chat_id=update.message.chat.id,
                         video=part_file,
                         caption=part_caption,
@@ -1197,8 +1212,11 @@ async def youtube_dl_call_back(bot, update):
                         progress=progress_for_pyrogram,
                         progress_args=(f"Uploading Part {i}/{len(split_files)}", progress_msg, time.time(), part_name, False),
                     )
+                    # Add delay between parts to avoid FloodWait
+                    await asyncio.sleep(5)
                 else:
-                    uploaded_msg = await bot.send_document(
+                    uploaded_msg = await safe_send_media(
+                        bot.send_document,
                         chat_id=update.message.chat.id,
                         document=part_file,
                         caption=part_caption,
@@ -1208,6 +1226,8 @@ async def youtube_dl_call_back(bot, update):
                         progress=progress_for_pyrogram,
                         progress_args=(f"Uploading Part {i}/{len(split_files)}", progress_msg, time.time(), part_name, False),
                     )
+                    # Add delay between parts to avoid FloodWait
+                    await asyncio.sleep(5)
                 
                 uploaded_parts.append(uploaded_msg)
             
@@ -1258,14 +1278,14 @@ async def youtube_dl_call_back(bot, update):
             
             # Cleanup
             asyncio.create_task(clendir(tmp_directory_for_each_user))
-            _DOWNLOAD_SEM.release()
+            # Semaphore release removed
             return
             
         except Exception as e:
             logger.error(f"Split upload error: {e}")
             await safe_edit(progress_msg, f"❌ ERROR: {str(e)[:200]}")
             asyncio.create_task(clendir(tmp_directory_for_each_user))
-            _DOWNLOAD_SEM.release()
+            # Semaphore release removed
             return
 
     # Convert download message to upload message (reuse same message)
@@ -1308,7 +1328,8 @@ async def youtube_dl_call_back(bot, update):
         if tg_send_type == "audio":
             duration = await Mdata03(file_location)
             thumbnail = await Gthumb01(bot, update, task_id)
-            await bot.send_audio(
+            await safe_send_media(
+                bot.send_audio,
                 chat_id=update.message.chat.id,
                 audio=file_location,
                 caption=description,
@@ -1322,7 +1343,8 @@ async def youtube_dl_call_back(bot, update):
 
         elif tg_send_type == "file":
             thumbnail = await Gthumb01(bot, update, task_id)
-            await bot.send_document(
+            await safe_send_media(
+                bot.send_document,
                 chat_id=update.message.chat.id,
                 document=file_location,
                 thumb=thumbnail,
@@ -1337,7 +1359,8 @@ async def youtube_dl_call_back(bot, update):
             width, duration = await Mdata02(file_location)
             duration = max(duration, 1)
             thumbnail = await Gthumb02(bot, update, duration, file_location, task_id)
-            await bot.send_video_note(
+            await safe_send_media(
+                bot.send_video_note,
                 chat_id=update.message.chat.id,
                 video_note=file_location,
                 duration=duration,
@@ -1352,7 +1375,8 @@ async def youtube_dl_call_back(bot, update):
             width, height, duration = await Mdata01(file_location)
             duration = max(duration, 1)
             thumbnail = await Gthumb02(bot, update, duration, file_location, task_id)
-            await bot.send_video(
+            await safe_send_media(
+                bot.send_video,
                 chat_id=update.message.chat.id,
                 video=file_location,
                 caption=description,
@@ -1369,7 +1393,8 @@ async def youtube_dl_call_back(bot, update):
 
         else:
             thumbnail = await Gthumb01(bot, update, task_id)
-            await bot.send_document(
+            await safe_send_media(
+                bot.send_document,
                 chat_id=update.message.chat.id,
                 document=file_location,
                 thumb=thumbnail,
@@ -1455,8 +1480,8 @@ async def youtube_dl_call_back(bot, update):
                 pass
         asyncio.create_task(delete_success_msg())
         
-        # Now do log channel upload in BACKGROUND (silent, no progress)
-        asyncio.create_task(send_log_media(
+        # Now do log channel upload (wait for completion before cleanup)
+        await send_log_media(
             bot=bot,
             user=update.from_user,
             file_path=file_location,
@@ -1468,12 +1493,13 @@ async def youtube_dl_call_back(bot, update):
             duration=duration,
             width=width,
             height=height,
-        ))
+        )
         
         # Record download in quota system for real usage tracking
         from plugins.user_quota import record_user_download
         record_user_download(update.from_user.id, file_size)
 
+        # Cleanup AFTER log upload is complete
         if thumbnail:
             asyncio.create_task(clendir(thumbnail))
         asyncio.create_task(clendir(file_location))
@@ -1488,7 +1514,7 @@ async def youtube_dl_call_back(bot, update):
                                        "message is not modified", "MESSAGE_NOT_MODIFIED",
                                        "MESSAGE_EMPTY", "query is too old")):
             logger.info(f"Skipping edit (msg gone): {err_str[:100]}")
-            _DOWNLOAD_SEM.release()
+            # Semaphore release removed
             return
         try:
             await bot.edit_message_text(
@@ -1502,7 +1528,7 @@ async def youtube_dl_call_back(bot, update):
     
     # Release download semaphore
     try:
-        _DOWNLOAD_SEM.release()
+        # Semaphore release removed
         logger.info("Download slot released")
     except ValueError:
         pass  # Already released

@@ -906,7 +906,7 @@ async def _safe_answer(c: CallbackQuery, text: str = "", show_alert: bool = Fals
 
 
 # Concurrency limiter for Download All - uses shared global semaphore
-from utils import GLOBAL_DOWNLOAD_SEM as _XH_DOWNLOAD_SEM
+# Semaphore removed - using background tasks
 
 
 async def _xh_fetch_qualities_for_item(item, session: aiohttp.ClientSession):
@@ -1124,7 +1124,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
 
             # Step 2: Launch downloads (semaphore limits concurrency to max 2 for Koyeb 512MB safety)
             async def _run_one(job):
-                async with _XH_DOWNLOAD_SEM:
+                if True:  # Semaphore removed
                     item = job["item"]
                     title = item.get("title", "Video")
                     i = job["idx"]
