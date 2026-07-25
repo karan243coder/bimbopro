@@ -227,8 +227,28 @@ def is_admin(uid: int) -> bool:
     except Exception:
         return False
 
-# Global download semaphore - shared across all download systems
-# Limits concurrent downloads to prevent OOM on 512MB RAM servers
+# Global download semaphore - allows 2 concurrent downloads (for 512MB RAM)
+# Per-user queue system prevents abuse while allowing multi-user support
 import asyncio
-GLOBAL_DOWNLOAD_SEM = asyncio.Semaphore(1)
+GLOBAL_DOWNLOAD_SEM = asyncio.Semaphore(2)  # Increased from 1 to 2
+
+# Per-user download queue system
+_user_download_queues = {}
+
+def get_user_queue(user_id: int):
+    """Get or create user's download queue"""
+    if user_id not in _user_download_queues:
+        _user_download_queues[user_id] = {
+            'queue': [],
+            'processing': False,
+            'position': 0
+        }
+    return _user_download_queues[user_id]
+
+def add_to_queue(user_id: int, task_info: dict) -> int:
+    """Add task to user's queue, returns queue position"""
+    queue = get_user_queue(user_id)
+    queue['queue'].append(task_info)
+    queue['position'] += 1
+    return len(queue['queue'])
 
