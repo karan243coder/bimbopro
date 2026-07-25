@@ -166,6 +166,11 @@ BIMBO_OWNER_ID = Config.BIMBO_OWNER_ID
 BIMBO_DATABASE_URL = Config.BIMBO_DATABASE_URL
 BIMBO_DOWNLOAD_LOCATION = Config.BIMBO_DOWNLOAD_LOCATION
 BIMBO_DOWNLOAD_DIR = _str("BIMBO_DOWNLOAD_DIR", Config.BIMBO_DOWNLOAD_LOCATION)
+
+# Terabox credentials for auto-login
+BIMBO_TERABOX_EMAIL = _str("BIMBO_TERABOX_EMAIL", "")
+BIMBO_TERABOX_PASSWORD = _str("BIMBO_TERABOX_PASSWORD", "")
+
 # Terabox Cookie Configuration
 # Priority: Environment variable > cookies.txt file
 _terabox_cookie_env = _str("BIMBO_TERABOX_COOKIE", "")
