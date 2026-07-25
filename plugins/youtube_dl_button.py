@@ -630,6 +630,21 @@ async def youtube_dl_call_back(bot, update):
         if org:
             hdr_args += ["--add-header", f"Origin:{org}"]
 
+        # FIX: Resolve CDN hostname to IPv4 to bypass IPv6-only CDN nodes on Koyeb
+        import socket as _socket
+        from urllib.parse import urlparse as _urlparse
+        try:
+            _parsed = _urlparse(video_url)
+            _cdn_host = _parsed.hostname
+            _ipv4_addrs = _socket.getaddrinfo(_cdn_host, 443, _socket.AF_INET, _socket.SOCK_STREAM)
+            if _ipv4_addrs:
+                _ipv4_addr = _ipv4_addrs[0][4][0]
+                video_url = video_url.replace(f"://{_cdn_host}", f"://{_ipv4_addr}")
+                hdr_args += ["--add-header", f"Host:{_cdn_host}"]
+                logger.info("eporner: resolved CDN %s -> %s (IPv4)", _cdn_host, _ipv4_addr)
+        except Exception as _e:
+            logger.warning("eporner: IPv4 resolve failed: %s", _e)
+
         if tg_send_type == "audio":
             command_to_exec = common_ytdlp_args + hdr_args + [
                 "--prefer-ffmpeg", "--extract-audio",
@@ -978,6 +993,21 @@ async def youtube_dl_call_back(bot, update):
                     hdr_args_fresh += ["--add-header", f"Referer:{ref_f}"]
                 if org_f:
                     hdr_args_fresh += ["--add-header", f"Origin:{org_f}"]
+
+                # FIX: Resolve CDN hostname to IPv4 to bypass IPv6-only CDN nodes
+                import socket as _socket
+                from urllib.parse import urlparse as _urlparse
+                try:
+                    _parsed = _urlparse(fresh_url)
+                    _cdn_host = _parsed.hostname
+                    _ipv4_addrs = _socket.getaddrinfo(_cdn_host, 443, _socket.AF_INET, _socket.SOCK_STREAM)
+                    if _ipv4_addrs:
+                        _ipv4_addr = _ipv4_addrs[0][4][0]
+                        fresh_url = fresh_url.replace(f"://{_cdn_host}", f"://{_ipv4_addr}")
+                        hdr_args_fresh += ["--add-header", f"Host:{_cdn_host}"]
+                        logger.info("eporner fallback: resolved %s -> %s (IPv4)", _cdn_host, _ipv4_addr)
+                except Exception as _e:
+                    logger.warning("eporner fallback: IPv4 resolve failed: %s", _e)
 
                 fallback_cmd = common_ytdlp_args + hdr_args_fresh + [
                     "-o", download_directory,
