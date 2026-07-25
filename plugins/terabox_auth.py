@@ -8,7 +8,7 @@ import time
 import requests
 import json
 from typing import Optional, Dict
-from config import Config
+from config import BIMBO_TERABOX_COOKIE, BIMBO_TERABOX_EMAIL, BIMBO_TERABOX_PASSWORD
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,8 @@ class TeraboxAuth:
             'Origin': 'https://www.terabox.com',
             'Referer': 'https://www.terabox.com/',
         })
-        self.email = Config.BIMBO_TERABOX_EMAIL
-        self.password = Config.BIMBO_TERABOX_PASSWORD
+        self.email = BIMBO_TERABOX_EMAIL
+        self.password = BIMBO_TERABOX_PASSWORD
         self.cookies = {}
         self.last_login_time = 0
         self.session_valid = False
