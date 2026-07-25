@@ -4,7 +4,10 @@
 
 import os
 import re
+import logging
 from os import environ
+
+logger = logging.getLogger(__name__)
 
 id_pattern = re.compile(r'^\d+$')
 
@@ -163,5 +166,47 @@ BIMBO_OWNER_ID = Config.BIMBO_OWNER_ID
 BIMBO_DATABASE_URL = Config.BIMBO_DATABASE_URL
 BIMBO_DOWNLOAD_LOCATION = Config.BIMBO_DOWNLOAD_LOCATION
 BIMBO_DOWNLOAD_DIR = _str("BIMBO_DOWNLOAD_DIR", Config.BIMBO_DOWNLOAD_LOCATION)
-BIMBO_TERABOX_COOKIE = _str("BIMBO_TERABOX_COOKIE", "")
+# Terabox Cookie Configuration
+# Priority: Environment variable > cookies.txt file
+_terabox_cookie_env = _str("BIMBO_TERABOX_COOKIE", "")
+
+def _load_terabox_cookie_from_file():
+    """Load Terabox cookie from cookies.txt file"""
+    try:
+        cookie_file = os.path.join(os.path.dirname(__file__), 'cookies.txt')
+        if not os.path.exists(cookie_file):
+            return ""
+        
+        cookies = []
+        with open(cookie_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Netscape cookie format: domain \t flag \t path \t secure \t expiration \t name \t value
+                parts = line.split('\t')
+                if len(parts) >= 7:
+                    domain = parts[0]
+                    name = parts[5]
+                    value = parts[6]
+                    
+                    # Only include terabox.com cookies
+                    if 'terabox.com' in domain:
+                        # Important cookies for Terabox
+                        if name in ['ndus', 'csrfToken', 'TSID', 'browserid', 'lang', '_fwb', '__bid_n']:
+                            cookies.append(f"{name}={value}")
+        
+        return '; '.join(cookies)
+    except Exception as e:
+        logger.warning(f"Failed to load Terabox cookie from file: {e}")
+        return ""
+
+# Use environment variable if set, otherwise load from cookies.txt
+if _terabox_cookie_env:
+    BIMBO_TERABOX_COOKIE = _terabox_cookie_env
+else:
+    BIMBO_TERABOX_COOKIE = _load_terabox_cookie_from_file()
+    if BIMBO_TERABOX_COOKIE:
+        logger.info("Loaded Terabox cookie from cookies.txt file")
 BIMBO_WATERMARK_TEXT = Config.BIMBO_WATERMARK_TEXT
