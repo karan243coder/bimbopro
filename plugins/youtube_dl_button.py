@@ -630,20 +630,18 @@ async def youtube_dl_call_back(bot, update):
         if org:
             hdr_args += ["--add-header", f"Origin:{org}"]
 
-        # FIX: Resolve CDN hostname to IPv4 to bypass IPv6-only CDN nodes on Koyeb
-        import socket as _socket
-        from urllib.parse import urlparse as _urlparse
-        try:
-            _parsed = _urlparse(video_url)
-            _cdn_host = _parsed.hostname
-            _ipv4_addrs = _socket.getaddrinfo(_cdn_host, 443, _socket.AF_INET, _socket.SOCK_STREAM)
-            if _ipv4_addrs:
-                _ipv4_addr = _ipv4_addrs[0][4][0]
-                video_url = video_url.replace(f"://{_cdn_host}", f"://{_ipv4_addr}")
-                hdr_args += ["--add-header", f"Host:{_cdn_host}"]
-                logger.info("eporner: resolved CDN %s -> %s (IPv4)", _cdn_host, _ipv4_addr)
-        except Exception as _e:
-            logger.warning("eporner: IPv4 resolve failed: %s", _e)
+        # FIX: Replace DE CDN with FR CDN (DE blocked on Koyeb EU)
+        import re as _re
+        if '-de-cdn.eporner.com' in video_url:
+            # Replace DE CDN with known working FR CDN nodes
+            _fr_cdns = [
+                'vid-s2-s50-fr-cdn.eporner.com',
+                'vid-s6-s50-fr-cdn.eporner.com',
+            ]
+            import random as _random
+            _fr_cdn = _random.choice(_fr_cdns)
+            video_url = _re.sub(r'vid-s\d+-n\d+-de-cdn\.eporner\.com', _fr_cdn, video_url)
+            logger.info("eporner: replaced DE CDN with FR CDN: %s", _fr_cdn)
 
         if tg_send_type == "audio":
             command_to_exec = common_ytdlp_args + hdr_args + [
@@ -973,6 +971,17 @@ async def youtube_dl_call_back(bot, update):
                     avail = sorted(fresh_ep["qualities"], key=lambda q: abs(int(q["height"]) - _h))
                     if avail:
                         fresh_url = avail[0].get("url", avail[0].get("m3u8"))
+                
+                # QUALITY FALLBACK: if high quality CDN unreachable, try lower quality
+                # (lower qualities often use different CDN nodes — FR instead of DE)
+                if not fresh_url and len(fresh_ep["qualities"]) > 1:
+                    logger.info("eporner: quality %dp unavailable, trying 720p fallback", _h)
+                    for q in fresh_ep["qualities"]:
+                        if int(q["height"]) <= 720:
+                            fresh_url = q.get("url", q.get("m3u8"))
+                            break
+                    if not fresh_url:
+                        fresh_url = fresh_ep["qualities"][-1].get("url", fresh_ep["qualities"][-1].get("m3u8"))
 
                 if not fresh_url:
                     asyncio.create_task(clendir(tmp_directory_for_each_user))
@@ -994,20 +1003,17 @@ async def youtube_dl_call_back(bot, update):
                 if org_f:
                     hdr_args_fresh += ["--add-header", f"Origin:{org_f}"]
 
-                # FIX: Resolve CDN hostname to IPv4 to bypass IPv6-only CDN nodes
-                import socket as _socket
-                from urllib.parse import urlparse as _urlparse
-                try:
-                    _parsed = _urlparse(fresh_url)
-                    _cdn_host = _parsed.hostname
-                    _ipv4_addrs = _socket.getaddrinfo(_cdn_host, 443, _socket.AF_INET, _socket.SOCK_STREAM)
-                    if _ipv4_addrs:
-                        _ipv4_addr = _ipv4_addrs[0][4][0]
-                        fresh_url = fresh_url.replace(f"://{_cdn_host}", f"://{_ipv4_addr}")
-                        hdr_args_fresh += ["--add-header", f"Host:{_cdn_host}"]
-                        logger.info("eporner fallback: resolved %s -> %s (IPv4)", _cdn_host, _ipv4_addr)
-                except Exception as _e:
-                    logger.warning("eporner fallback: IPv4 resolve failed: %s", _e)
+                # FIX: Replace DE CDN with FR CDN (DE blocked on Koyeb EU)
+                import re as _re
+                if '-de-cdn.eporner.com' in fresh_url:
+                    _fr_cdns = [
+                        'vid-s2-s50-fr-cdn.eporner.com',
+                        'vid-s6-s50-fr-cdn.eporner.com',
+                    ]
+                    import random as _random
+                    _fr_cdn = _random.choice(_fr_cdns)
+                    fresh_url = _re.sub(r'vid-s\d+-n\d+-de-cdn\.eporner\.com', _fr_cdn, fresh_url)
+                    logger.info("eporner fallback: replaced DE CDN with FR CDN: %s", _fr_cdn)
 
                 fallback_cmd = common_ytdlp_args + hdr_args_fresh + [
                     "-o", download_directory,

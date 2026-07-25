@@ -353,7 +353,7 @@ def extract(url: str, cookies_file: str = None):
                 "hash": ch,
                 "device": "generic",
                 "domain": urlparse(base).netloc,
-                "fallback": "false",
+                "fallback": "true",  # Use fallback CDN nodes (FR instead of DE — DE blocked on Koyeb)
             },
             headers=api_headers,
             timeout=20,
