@@ -54,3 +54,4 @@ mega.py==1.0.8
 
 # UI / misc
 rich>=13.7.1
+terabox-downloader>=1.8
