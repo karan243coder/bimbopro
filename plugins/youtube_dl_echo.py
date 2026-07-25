@@ -31,6 +31,9 @@ from plugins.redtube_engine import is_redtube as _rt_is, extract_video_info as r
 from plugins.youporn_engine import is_youporn as _yp_is, extract_video_info as youporn_extract
 from plugins.tube8_engine import is_tube8 as _t8_is, extract_video_info as tube8_extract
 from plugins.spankbang_engine import is_spankbang as _sb_is, extract_video_info as spankbang_extract
+from plugins.wowxxx_engine import is_wowxxx as _wx_is, extract_video_info as wowxxx_extract
+from plugins.xhand_engine import is_xhand as _xh2_is, extract_video_info as xhand_extract
+from plugins.bang_engine import is_bang as _bg_is, extract_video_info as bang_extract
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
@@ -107,6 +110,18 @@ def is_tube8(url: str) -> bool:
 
 def is_spankbang(url: str) -> bool:
     return _sb_is(url)
+
+
+def is_wowxxx(url: str) -> bool:
+    return _wx_is(url)
+
+
+def is_xhand(url: str) -> bool:
+    return _xh2_is(url)
+
+
+def is_bang(url: str) -> bool:
+    return _bg_is(url)
 
 
 def build_terabox_keyboard(tb_info, task_id=""):
@@ -1113,6 +1128,111 @@ async def echo(bot, update):
                 return
         except Exception as e:
             logger.error(f"SpankBang engine error: {e}")
+
+    # Wow.xxx Handler
+    if is_wowxxx(url):
+        try:
+            loop = asyncio.get_event_loop()
+            wx_info = await loop.run_in_executor(None, wowxxx_extract, url)
+            if wx_info and wx_info.get("qualities"):
+                logger.info("wowxxx custom engine OK: %s", url)
+                wx_json = {
+                    "title": wx_info.get("title") or "Wow.xxx Video",
+                    "fulltitle": wx_info.get("title") or "Wow.xxx Video",
+                    "duration": wx_info.get("duration"),
+                    "_wowxxx": True,
+                    "wowxxx_qualities": {str(q["height"]): q["url"] for q in wx_info["qualities"]},
+                    "wowxxx_headers": wx_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(wx_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(wx_info, task_id, "wx", "Wow.xxx")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Wow.xxx video detected</b>\n\n<b>📹 Title:</b> {escape_html(wx_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"Wow.xxx engine error: {e}")
+
+    # Xhand.com Handler
+    if is_xhand(url):
+        try:
+            loop = asyncio.get_event_loop()
+            xh_info = await loop.run_in_executor(None, xhand_extract, url)
+            if xh_info and xh_info.get("qualities"):
+                logger.info("xhand custom engine OK: %s", url)
+                xh_json = {
+                    "title": xh_info.get("title") or "Xhand Video",
+                    "fulltitle": xh_info.get("title") or "Xhand Video",
+                    "duration": xh_info.get("duration"),
+                    "_xhand": True,
+                    "xhand_qualities": {str(q["height"]): q["url"] for q in xh_info["qualities"]},
+                    "xhand_headers": xh_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(xh_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(xh_info, task_id, "xh", "Xhand")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Xhand.com video detected</b>\n\n<b>📹 Title:</b> {escape_html(xh_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"Xhand engine error: {e}")
+
+    # Bang.com Handler
+    if is_bang(url):
+        try:
+            loop = asyncio.get_event_loop()
+            bg_info = await loop.run_in_executor(None, bang_extract, url)
+            if bg_info and bg_info.get("qualities"):
+                logger.info("bang custom engine OK: %s", url)
+                bg_json = {
+                    "title": bg_info.get("title") or "Bang.com Video",
+                    "fulltitle": bg_info.get("title") or "Bang.com Video",
+                    "duration": bg_info.get("duration"),
+                    "_bang": True,
+                    "bang_qualities": {str(q["height"]): q["url"] for q in bg_info["qualities"]},
+                    "bang_headers": bg_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(bg_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(bg_info, task_id, "bg", "Bang")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Bang.com video detected</b>\n\n<b>📹 Title:</b> {escape_html(bg_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"Bang engine error: {e}")
 
     command_to_exec = [
         "yt-dlp",
