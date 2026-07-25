@@ -29,6 +29,7 @@ from config import Config
 from utils import (
     safe_filename, user_download_dir, cleanup_dir, humanbytes, run_cmd,
     is_admin, is_premium, rate_limit_check, get_url,
+    safe_reply_text, safe_edit_text,
 )
 from plugins.eporner_engine import (
     is_eporner, UA, QLABEL, extract_video as ep_extract, extract_listing as ep_listing,
@@ -175,7 +176,7 @@ async def _ep_full_queue_worker(client, job_id, user, status_msg):
             item = await claim_next_item(job_id)
             if not item:
                 await update_job(job_id, status="completed")
-                try: await status_msg.edit_text(f"✅ Full profile queue complete\n\nDone: {completed} | Failed: {failed}")
+                try: await safe_edit_text(status_msg, f"✅ Full profile queue complete\n\nDone: {completed} | Failed: {failed}")
                 except Exception: pass
                 return
             idx = item.get("index", 0) + 1
@@ -183,7 +184,7 @@ async def _ep_full_queue_worker(client, job_id, user, status_msg):
             current_job = await get_job(job_id)
             total = len((current_job or {}).get("items", []))
             try:
-                await status_msg.edit_text(f"📥 Full profile queue\n\n🔽 {idx}/{total} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}")
+                await safe_edit_text(status_msg, f"📥 Full profile queue\n\n🔽 {idx}/{total} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}")
             except Exception: pass
 
             url = item.get("url", "")
@@ -268,14 +269,14 @@ def _ep_quality_kbd(token, idx, qlts):
 
 
 async def _send_ep_listing(m: Message, url: str, title: str = "🔞 Eporner"):
-    msg = await m.reply_text(f"{title}\n🔍 Loading...")
+    msg = await safe_reply_text(m, f"{title}\n🔍 Loading...")
     try:
         loop = asyncio.get_event_loop()
         logger.info("ep listing: calling extract_listing for URL: %s", url)
         items, next_page, err = await loop.run_in_executor(None, ep_listing, url)
         logger.info("ep listing: result items=%d, next=%s, err=%s", len(items), bool(next_page), err)
         if err or not items:
-            return await msg.edit_text(f"❌ No videos found or error: {err or 'unknown'}\n\nURL: <code>{url[:100]}</code>")
+            return await safe_edit_text(msg, f"❌ No videos found or error: {err or 'unknown'}\n\nURL: <code>{url[:100]}</code>")
         items = sorted(items, key=lambda v: v.get("duration_sec", 999999), reverse=True)
         token = _store_ep_listing(items, next_page, title=title, current_url=url)
         text = f"{title}\n\n📋 {len(items)} videos detected\n⏱ Default: longest first\n\n"
@@ -283,10 +284,10 @@ async def _send_ep_listing(m: Message, url: str, title: str = "🔞 Eporner"):
             t = re.sub(r"\s+", " ", v["title"])[:35]
             dur = f" ⏱{v['duration']}" if v.get("duration") else ""
             text += f"\n{i}. {t}{dur}"
-        await msg.edit_text(text, reply_markup=_ep_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long"))
+        await safe_edit_text(msg, text, reply_markup=_ep_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long"))
     except Exception as e:
         logger.exception("ep listing")
-        await msg.edit_text(f"❌ Error: <code>{e}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{e}</code>")
 
 
 def _store_ep_listing(items, next_page, title="🔞 Eporner", current_url=""):
@@ -305,10 +306,10 @@ def _store_ep_listing(items, next_page, title="🔞 Eporner", current_url=""):
 @Client.on_message(filters.private & _cmd("eps", "epsearch"))
 async def cmd_ep_search(client: Client, m: Message):
     if not await _ep_vip_allowed(m):
-        return await m.reply_text(_EP_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await safe_reply_text(m, _EP_VIP_DENY_TEXT, disable_web_page_preview=True)
     parts = (m.text or "").split(None, 1)
     if len(parts) < 2:
-        return await m.reply_text("Usage: <code>/eps search query</code>")
+        return await safe_reply_text(m, "Usage: <code>/eps search query</code>")
     q = parts[1].strip()
     url = f"https://www.eporner.com/search/{quote(q)}/"
     await _send_ep_listing(m, url, title=f"🔞 Eporner Search: {q}")
@@ -317,14 +318,14 @@ async def cmd_ep_search(client: Client, m: Message):
 @Client.on_message(filters.private & _cmd("epp", "eppornstar"))
 async def cmd_ep_pornstar(client: Client, m: Message):
     if not await _ep_vip_allowed(m):
-        return await m.reply_text(_EP_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await safe_reply_text(m, _EP_VIP_DENY_TEXT, disable_web_page_preview=True)
     parts = (m.text or "").split(None, 1)
     url = parts[1] if len(parts) > 1 else ""
     if m.reply_to_message and m.reply_to_message.text:
         url = m.reply_to_message.text
     url = get_url(url)
     if not url or not is_eporner(url):
-        return await m.reply_text("Usage: <code>/epp https://www.eporner.com/pornstar/angela-white/</code>")
+        return await safe_reply_text(m, "Usage: <code>/epp https://www.eporner.com/pornstar/angela-white/</code>")
     await _send_ep_listing(m, url, title="🔞 Eporner Pornstar / Profile")
 
 
@@ -344,11 +345,11 @@ async def cmd_ep_auto(client: Client, m: Message):
         )
         if is_vip:
             base += "\n💎 <b>Commands:</b> /eps <query>, /epp <pornstar_url>\n"
-        return await m.reply_text(base, disable_web_page_preview=True)
+        return await safe_reply_text(m, base, disable_web_page_preview=True)
 
     t = _ep_type(url)
     if t == "video":
-        await m.reply_text(
+        await safe_reply_text(m, 
             f"🔞 <b>Eporner Video Detected</b>\n"
             f"<code>{url[:150]}</code>\n\n"
             f"🔄 Quality buttons load ho rahe hain..."
@@ -356,7 +357,7 @@ async def cmd_ep_auto(client: Client, m: Message):
         return
 
     if not is_vip:
-        return await m.reply_text(_EP_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await safe_reply_text(m, _EP_VIP_DENY_TEXT, disable_web_page_preview=True)
 
     await _send_ep_listing(m, url, title="🔞 Eporner Listing")
 
@@ -381,13 +382,13 @@ async def ep_callbacks(client: Client, c: CallbackQuery):
             try:
                 all_items = await _ep_collect_all_pages(entry.get("current_url") or entry.get("next"), None)
                 if not all_items:
-                    return await status_msg.edit_text("❌ No videos found for queue.")
+                    return await safe_edit_text(status_msg, "❌ No videos found for queue.")
                 job_id = await create_job(c.from_user.id, c.message.chat.id, entry.get("title", "Eporner Channel"), entry.get("current_url", ""), all_items)
-                await status_msg.edit_text(f"✅ Eporner Queue Created\n\n📋 Videos: {len(all_items)}\n⚡ Mode: 1-by-1\n📦 Max Quality\n🔁 Restart-safe queue")
+                await safe_edit_text(status_msg, f"✅ Eporner Queue Created\n\n📋 Videos: {len(all_items)}\n⚡ Mode: 1-by-1\n📦 Max Quality\n🔁 Restart-safe queue")
                 asyncio.create_task(_ep_full_queue_worker(client, job_id, c.from_user, status_msg))
             except Exception as exc:
                 logger.exception("ep full queue create failed")
-                await status_msg.edit_text(f"❌ Queue create failed: <code>{str(exc)[:500]}</code>")
+                await safe_edit_text(status_msg, f"❌ Queue create failed: <code>{str(exc)[:500]}</code>")
             return
 
         if action == "ep_pageall":
@@ -456,7 +457,7 @@ async def ep_callbacks(client: Client, c: CallbackQuery):
                 await asyncio.sleep(1)
 
             try:
-                await status_msg.edit_text(
+                await safe_edit_text(status_msg, 
                     f"✅ **Eporner Download All Started!**\n\n"
                     f"📥 {len(items)} videos queue me hain (best quality per video).\n"
                     f"⚡ Max 2 concurrent downloads (RAM-safe)."

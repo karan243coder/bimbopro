@@ -28,6 +28,7 @@ from translation import Translation
 from utils import (
     is_media, get_file_id, run_cmd, humanbytes, time_formatter,
     cleanup_dir, user_download_dir, safe_filename, is_admin,
+    safe_reply_text, safe_edit_text, safe_send_message,
 )
 from plugins.video_utils import (
     video_converter, screenshot_generator, get_video_duration,
@@ -59,7 +60,7 @@ def _to_seconds(s: str) -> int:
 async def _download_replied(client: Client, msg: Message, uid: int, out_dir: str) -> str:
     """Download replied media to out_dir, returns local file path."""
     os.makedirs(out_dir, exist_ok=True)
-    status = await msg.reply_text("📥 Downloading media...")
+    status = await safe_reply_text(msg, "📥 Downloading media...")
     path = None
 
     def progress(current, total):
@@ -81,10 +82,10 @@ async def _download_replied(client: Client, msg: Message, uid: int, out_dir: str
         elif msg.reply_to_message.animation:
             path = await msg.reply_to_message.download(file_name=os.path.join(out_dir, "anim.gif"))
         else:
-            await status.edit_text(Translation.NO_VIDEO_REPLY)
+            await safe_edit_text(status, Translation.NO_VIDEO_REPLY)
             return None, status
     except Exception as e:
-        await status.edit_text(f"❌ Download failed: <code>{e}</code>")
+        await safe_edit_text(status, f"❌ Download failed: <code>{e}</code>")
         return None, status
 
     await status.delete()
@@ -112,7 +113,7 @@ def _cmd(*names):
 @Client.on_message(filters.private & _cmd('ss', 'screenshot', 'screens'))
 async def cmd_screenshot(client: Client, message: Message):
     if not message.reply_to_message or not is_media(message.reply_to_message):
-        return await message.reply_text(Translation.NO_VIDEO_REPLY)
+        return await safe_reply_text(message, Translation.NO_VIDEO_REPLY)
     uid = message.from_user.id
     parts = (message.text or "").split()
     count = 5
@@ -124,17 +125,17 @@ async def cmd_screenshot(client: Client, message: Message):
 
     work = user_download_dir(uid) + f"/ss_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, err = await _download_replied(client, message, uid, work)
         if not path:
             return
-        await msg.edit_text(f"🎞️ Generating {count} screenshot(s)...")
+        await safe_edit_text(msg, f"🎞️ Generating {count} screenshot(s)...")
         shots = await generate_multiple_screenshots(path, count=count, output_dir=work)
         if not shots:
-            return await msg.edit_text("❌ Screenshots generate nahi ho paye (shayad video nahi hai).")
+            return await safe_edit_text(msg, "❌ Screenshots generate nahi ho paye (shayad video nahi hai).")
 
-        await msg.edit_text(f"📤 Uploading {len(shots)} screenshot(s)...")
+        await safe_edit_text(msg, f"📤 Uploading {len(shots)} screenshot(s)...")
         media = []
         from pyrogram.types import InputMediaPhoto
         for s in shots:
@@ -146,7 +147,7 @@ async def cmd_screenshot(client: Client, message: Message):
         await msg.delete()
     except Exception as e:
         logger.exception("ss error")
-        await msg.edit_text(f"❌ Error: <code>{e}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{e}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -155,7 +156,7 @@ async def cmd_screenshot(client: Client, message: Message):
 @Client.on_message(filters.private & _cmd('sample'))
 async def cmd_sample(client: Client, message: Message):
     if not message.reply_to_message or not (message.reply_to_message.video or message.reply_to_message.document):
-        return await message.reply_text(Translation.NO_VIDEO_REPLY)
+        return await safe_reply_text(message, Translation.NO_VIDEO_REPLY)
     uid = message.from_user.id
     parts = (message.text or "").split()
     secs = 60
@@ -167,7 +168,7 @@ async def cmd_sample(client: Client, message: Message):
 
     work = user_download_dir(uid) + f"/sample_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
@@ -184,12 +185,12 @@ async def cmd_sample(client: Client, message: Message):
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out,
         ]
-        await msg.edit_text(f"🎬 Cutting {secs}s sample...")
+        await safe_edit_text(msg, f"🎬 Cutting {secs}s sample...")
         rc, _o, err = await run_cmd(cmd, timeout=1800)
         if rc != 0 or not os.path.exists(out):
-            return await msg.edit_text(f"❌ Sample failed: <code>{err[:500]}</code>")
+            return await safe_edit_text(msg, f"❌ Sample failed: <code>{err[:500]}</code>")
         sz = os.path.getsize(out)
-        await msg.edit_text("📤 Uploading sample...")
+        await safe_edit_text(msg, "📤 Uploading sample...")
         await client.send_video(message.chat.id, video=out,
                                 caption=f"🎬 Sample ({secs}s) | {humanbytes(sz)}",
                                 supports_streaming=True,
@@ -197,7 +198,7 @@ async def cmd_sample(client: Client, message: Message):
         await msg.delete()
     except Exception as e:
         logger.exception("sample error")
-        await msg.edit_text(f"❌ Error: <code>{e}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{e}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -206,7 +207,7 @@ async def cmd_sample(client: Client, message: Message):
 @Client.on_message(filters.private & _cmd('trim', 'cut'))
 async def cmd_trim(client: Client, message: Message):
     if not message.reply_to_message:
-        return await message.reply_text(
+        return await safe_reply_text(message, 
             "<b>Usage:</b> Reply to a video with <code>/trim START END</code>\n"
             "Examples:\n"
             "<code>/trim 30 90</code> → from 30s to 90s\n"
@@ -214,17 +215,17 @@ async def cmd_trim(client: Client, message: Message):
         )
     parts = (message.text or "").split()
     if len(parts) < 3:
-        return await message.reply_text("❌ <code>/trim START END</code> de do.")
+        return await safe_reply_text(message, "❌ <code>/trim START END</code> de do.")
     try:
         s = _to_seconds(parts[1]); e = _to_seconds(parts[2])
     except Exception as ex:
-        return await message.reply_text(f"❌ Time parse error: {ex}")
+        return await safe_reply_text(message, f"❌ Time parse error: {ex}")
     if e <= s:
-        return await message.reply_text("❌ END must be > START.")
+        return await safe_reply_text(message, "❌ END must be > START.")
     uid = message.from_user.id
     work = user_download_dir(uid) + f"/trim_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
@@ -236,11 +237,11 @@ async def cmd_trim(client: Client, message: Message):
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
             "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
         ]
-        await msg.edit_text(f"✂️ Trimming {s}s → {e}s...")
+        await safe_edit_text(msg, f"✂️ Trimming {s}s → {e}s...")
         rc, _o, err = await run_cmd(cmd, timeout=3600)
         if rc != 0 or not os.path.exists(out):
-            return await msg.edit_text(f"❌ Trim failed: <code>{err[:600]}</code>")
-        await msg.edit_text("📤 Uploading...")
+            return await safe_edit_text(msg, f"❌ Trim failed: <code>{err[:600]}</code>")
+        await safe_edit_text(msg, "📤 Uploading...")
         await client.send_video(message.chat.id, video=out,
                                 caption=f"✂️ Trimmed {time_formatter(s)} → {time_formatter(e)}",
                                 supports_streaming=True,
@@ -248,7 +249,7 @@ async def cmd_trim(client: Client, message: Message):
         await msg.delete()
     except Exception as ex:
         logger.exception("trim error")
-        await msg.edit_text(f"❌ Error: <code>{ex}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{ex}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -257,7 +258,7 @@ async def cmd_trim(client: Client, message: Message):
 @Client.on_message(filters.private & _cmd('compress'))
 async def cmd_compress(client: Client, message: Message):
     if not message.reply_to_message:
-        return await message.reply_text("<b>Usage:</b> Reply to video with <code>/compress [low|med|high]</code>")
+        return await safe_reply_text(message, "<b>Usage:</b> Reply to video with <code>/compress [low|med|high]</code>")
     parts = (message.text or "").split()
     preset = parts[1].lower() if len(parts) > 1 else "med"
     presets = {
@@ -271,7 +272,7 @@ async def cmd_compress(client: Client, message: Message):
     uid = message.from_user.id
     work = user_download_dir(uid) + f"/cmp_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
@@ -286,13 +287,13 @@ async def cmd_compress(client: Client, message: Message):
             "-c:a", "aac", "-b:a", br,
             "-movflags", "+faststart", out,
         ]
-        await msg.edit_text(f"🗜️ Compressing ({preset})...")
+        await safe_edit_text(msg, f"🗜️ Compressing ({preset})...")
         rc, _o, err = await run_cmd(cmd, timeout=3600)
         if rc != 0 or not os.path.exists(out):
-            return await msg.edit_text(f"❌ Compress failed: <code>{err[:600]}</code>")
+            return await safe_edit_text(msg, f"❌ Compress failed: <code>{err[:600]}</code>")
         sz_in = os.path.getsize(path); sz_out = os.path.getsize(out)
         pct = 100 - (sz_out * 100 / max(sz_in, 1))
-        await msg.edit_text("📤 Uploading...")
+        await safe_edit_text(msg, "📤 Uploading...")
         await client.send_video(message.chat.id, video=out,
                                 caption=f"🗜️ Compressed ({preset})\n"
                                         f"Before: {humanbytes(sz_in)} → After: {humanbytes(sz_out)} "
@@ -302,7 +303,7 @@ async def cmd_compress(client: Client, message: Message):
         await msg.delete()
     except Exception as ex:
         logger.exception("compress error")
-        await msg.edit_text(f"❌ Error: <code>{ex}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{ex}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -313,7 +314,7 @@ async def cmd_watermark(client: Client, message: Message):
     # Usage: /wm "text" [top-left|top-right|bottom-left|bottom-right|center]
     # or reply to an image → use that as watermark
     if not message.reply_to_message:
-        return await message.reply_text(
+        return await safe_reply_text(message, 
             "<b>Usage:</b>\n"
             "• Reply to a video/photo with <code>/wm YourText [pos]</code>\n"
             "  pos: top-left, top-right, bottom-left (default), bottom-right, center\n"
@@ -339,7 +340,7 @@ async def cmd_watermark(client: Client, message: Message):
     uid = message.from_user.id
     work = user_download_dir(uid) + f"/wm_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
@@ -350,7 +351,7 @@ async def cmd_watermark(client: Client, message: Message):
 
         if is_photo:
             # PIL watermark for images
-            await msg.edit_text("💧 Adding watermark to image...")
+            await safe_edit_text(msg, "💧 Adding watermark to image...")
             img = Image.open(path).convert("RGBA")
             txt = Image.new("RGBA", img.size, (255, 255, 255, 0))
             fsize = max(24, min(img.size) // 22)
@@ -383,7 +384,7 @@ async def cmd_watermark(client: Client, message: Message):
                                     reply_to_message_id=message.id)
         else:
             # FFmpeg drawtext for videos
-            await msg.edit_text("💧 Adding watermark to video (FFmpeg)...")
+            await safe_edit_text(msg, "💧 Adding watermark to video (FFmpeg)...")
             # Escape special chars
             t = wm_text.replace(":", r"\:").replace("'", r"\'").replace("\\", r"\\\\")
             font_path = Config.BIMBO_WATERMARK_FONT
@@ -410,8 +411,8 @@ async def cmd_watermark(client: Client, message: Message):
             ]
             rc, _o, err = await run_cmd(cmd, timeout=3600)
             if rc != 0 or not os.path.exists(out):
-                return await msg.edit_text(f"❌ Watermark failed: <code>{err[:600]}</code>")
-            await msg.edit_text("📤 Uploading...")
+                return await safe_edit_text(msg, f"❌ Watermark failed: <code>{err[:600]}</code>")
+            await safe_edit_text(msg, "📤 Uploading...")
             await client.send_video(message.chat.id, video=out,
                                     caption=f"💧 Watermarked: {wm_text}",
                                     supports_streaming=True,
@@ -419,7 +420,7 @@ async def cmd_watermark(client: Client, message: Message):
         await msg.delete()
     except Exception as ex:
         logger.exception("wm error")
-        await msg.edit_text(f"❌ Error: <code>{ex}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{ex}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -428,28 +429,28 @@ async def cmd_watermark(client: Client, message: Message):
 @Client.on_message(filters.private & _cmd('mp3', 'audio', 'extract_audio'))
 async def cmd_mp3(client: Client, message: Message):
     if not message.reply_to_message or not (message.reply_to_message.video or message.reply_to_message.document):
-        return await message.reply_text(Translation.NO_VIDEO_REPLY)
+        return await safe_reply_text(message, Translation.NO_VIDEO_REPLY)
     uid = message.from_user.id
     work = user_download_dir(uid) + f"/mp3_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
             return
-        await msg.edit_text("🎵 Extracting audio...")
+        await safe_edit_text(msg, "🎵 Extracting audio...")
         out = os.path.join(work, os.path.splitext(os.path.basename(path))[0] + ".mp3")
         out_path = await extract_audio(path, "mp3", "192k")
         if not out_path:
-            return await msg.edit_text("❌ Audio extract failed.")
-        await msg.edit_text("📤 Uploading...")
+            return await safe_edit_text(msg, "❌ Audio extract failed.")
+        await safe_edit_text(msg, "📤 Uploading...")
         await client.send_audio(message.chat.id, audio=out_path,
                                 caption="🎵 Extracted by BIMBO",
                                 reply_to_message_id=message.id)
         await msg.delete()
     except Exception as ex:
         logger.exception("mp3 error")
-        await msg.edit_text(f"❌ Error: <code>{ex}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{ex}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -459,7 +460,7 @@ async def cmd_mp3(client: Client, message: Message):
 async def cmd_zip(client: Client, message: Message):
     """Reply to multiple files (user can forward many and then /zip as reply to last)."""
     # For simplicity: download the single replied file, or instruct user.
-    return await message.reply_text(
+    return await safe_reply_text(message, 
         "ℹ️ For bulk zip, use /zip after sending multiple files and replying to one. "
         "Beta: current version zips the single replied media into a zip."
     )
@@ -469,33 +470,33 @@ async def cmd_zip(client: Client, message: Message):
 @Client.on_message(filters.private & _cmd('unzip', 'extract'))
 async def cmd_unzip(client: Client, message: Message):
     if not message.reply_to_message or not message.reply_to_message.document:
-        return await message.reply_text("❌ Reply to a .zip file.")
+        return await safe_reply_text(message, "❌ Reply to a .zip file.")
     fn = (message.reply_to_message.document.file_name or "").lower()
     if not fn.endswith(".zip"):
-        return await message.reply_text("❌ Only .zip supported for now.")
+        return await safe_reply_text(message, "❌ Only .zip supported for now.")
     uid = message.from_user.id
     work = user_download_dir(uid) + f"/uz_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
             return
         out_dir = os.path.join(work, "extracted")
         os.makedirs(out_dir, exist_ok=True)
-        await msg.edit_text("📦 Extracting zip...")
+        await safe_edit_text(msg, "📦 Extracting zip...")
         try:
             with zipfile.ZipFile(path, "r") as z:
                 z.extractall(out_dir)
         except Exception as e:
-            return await msg.edit_text(f"❌ Extract failed: <code>{e}</code>")
+            return await safe_edit_text(msg, f"❌ Extract failed: <code>{e}</code>")
         files = []
         for root, _, fs in os.walk(out_dir):
             for f in fs:
                 files.append(os.path.join(root, f))
         if not files:
-            return await msg.edit_text("❌ Zip khali hai.")
-        await msg.edit_text(f"📤 Uploading {min(10, len(files))} file(s)...")
+            return await safe_edit_text(msg, "❌ Zip khali hai.")
+        await safe_edit_text(msg, f"📤 Uploading {min(10, len(files))} file(s)...")
         for f in files[:10]:  # cap 10 files per zip
             try:
                 sz = os.path.getsize(f)
@@ -506,11 +507,11 @@ async def cmd_unzip(client: Client, message: Message):
             except Exception as e:
                 logger.warning(f"unzip upload fail: {e}")
         if len(files) > 10:
-            await message.reply_text(f"ℹ️ Sirf pehle 10 files bheje, total {len(files)} the.")
+            await safe_reply_text(message, f"ℹ️ Sirf pehle 10 files bheje, total {len(files)} the.")
         await msg.delete()
     except Exception as ex:
         logger.exception("unzip error")
-        await msg.edit_text(f"❌ Error: <code>{ex}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{ex}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -519,22 +520,22 @@ async def cmd_unzip(client: Client, message: Message):
 @Client.on_message(filters.private & _cmd('rename', 'rn'))
 async def cmd_rename(client: Client, message: Message):
     if not message.reply_to_message:
-        return await message.reply_text("<b>Usage:</b> Reply to a file/video with <code>/rename new_name.mp4</code>")
+        return await safe_reply_text(message, "<b>Usage:</b> Reply to a file/video with <code>/rename new_name.mp4</code>")
     parts = (message.text or "").split(None, 1)
     if len(parts) < 2:
-        return await message.reply_text("❌ New name de do: <code>/rename new_name.mp4</code>")
+        return await safe_reply_text(message, "❌ New name de do: <code>/rename new_name.mp4</code>")
     new_name = safe_filename(parts[1])
     uid = message.from_user.id
     work = user_download_dir(uid) + f"/rn_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await message.reply_text(Translation.PROCESSING)
+    msg = await safe_reply_text(message, Translation.PROCESSING)
     try:
         path, _ = await _download_replied(client, message, uid, work)
         if not path:
             return
         new_path = os.path.join(work, new_name)
         shutil.copy(path, new_path)
-        await msg.edit_text("📤 Uploading...")
+        await safe_edit_text(msg, "📤 Uploading...")
         if new_name.lower().endswith((".mp4", ".mkv", ".webm", ".mov")):
             await client.send_video(message.chat.id, new_path,
                                     caption=f"✏️ Renamed: <b>{new_name}</b>",
@@ -547,6 +548,6 @@ async def cmd_rename(client: Client, message: Message):
         await msg.delete()
     except Exception as ex:
         logger.exception("rename error")
-        await msg.edit_text(f"❌ Error: <code>{ex}</code>")
+        await safe_edit_text(msg, f"❌ Error: <code>{ex}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
