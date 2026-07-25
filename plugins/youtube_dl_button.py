@@ -672,6 +672,194 @@ async def youtube_dl_call_back(bot, update):
                 "-o", download_directory,
                 video_url,
             ]
+    
+    # ============================================================
+    #  Custom Engines for Adult Sites
+    #  Sxyprn, Pornhub, XVideos, RedTube, YouPorn, Tube8, SpankBang
+    # ============================================================
+    
+    # Sxyprn Handler
+    elif response_json.get("_sxyprn") and youtube_dl_format.startswith("sxy-"):
+        sxyprn_qualities = response_json.get("sxyprn_qualities") or {}
+        sxyprn_headers = response_json.get("sxyprn_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = sxyprn_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in sxyprn_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = sxyprn_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Sxyprn quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = sxyprn_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # Pornhub Handler
+    elif response_json.get("_pornhub") and youtube_dl_format.startswith("ph-"):
+        pornhub_qualities = response_json.get("pornhub_qualities") or {}
+        pornhub_headers = response_json.get("pornhub_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = pornhub_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in pornhub_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = pornhub_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Pornhub quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = pornhub_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # XVideos Handler
+    elif response_json.get("_xvideos") and youtube_dl_format.startswith("xv-"):
+        xvideos_qualities = response_json.get("xvideos_qualities") or {}
+        xvideos_headers = response_json.get("xvideos_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = xvideos_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in xvideos_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = xvideos_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: XVideos quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = xvideos_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # RedTube Handler
+    elif response_json.get("_redtube") and youtube_dl_format.startswith("rt-"):
+        redtube_qualities = response_json.get("redtube_qualities") or {}
+        redtube_headers = response_json.get("redtube_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = redtube_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in redtube_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = redtube_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: RedTube quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = redtube_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # YouPorn Handler
+    elif response_json.get("_youporn") and youtube_dl_format.startswith("yp-"):
+        youporn_qualities = response_json.get("youporn_qualities") or {}
+        youporn_headers = response_json.get("youporn_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = youporn_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in youporn_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = youporn_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: YouPorn quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = youporn_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # Tube8 Handler
+    elif response_json.get("_tube8") and youtube_dl_format.startswith("t8-"):
+        tube8_qualities = response_json.get("tube8_qualities") or {}
+        tube8_headers = response_json.get("tube8_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = tube8_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in tube8_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = tube8_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Tube8 quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = tube8_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # SpankBang Handler
+    elif response_json.get("_spankbang") and youtube_dl_format.startswith("sb-"):
+        spankbang_qualities = response_json.get("spankbang_qualities") or {}
+        spankbang_headers = response_json.get("spankbang_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = spankbang_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in spankbang_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = spankbang_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: SpankBang quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = spankbang_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
     elif tg_send_type == "audio":
         command_to_exec = common_ytdlp_args + [
             "--prefer-ffmpeg", "--extract-audio",

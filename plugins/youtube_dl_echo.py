@@ -24,6 +24,13 @@ from utils import check_verification, get_token
 from plugins.xhamster_engine import is_xhamster as _xh_is, extract as xh_extract
 from plugins.eporner_engine import is_eporner as _ep_is, extract_video as ep_extract
 from plugins.terabox_engine import is_terabox as _tb_is, extract as tb_extract
+from plugins.sxyprn_engine import is_sxyprn as _sxy_is, extract_video_info as sxyprn_extract
+from plugins.pornhub_engine import is_pornhub as _ph_is, extract_video_info as pornhub_extract
+from plugins.xvideos_engine import is_xvideos as _xv_is, extract_video_info as xvideos_extract
+from plugins.redtube_engine import is_redtube as _rt_is, extract_video_info as redtube_extract
+from plugins.youporn_engine import is_youporn as _yp_is, extract_video_info as youporn_extract
+from plugins.tube8_engine import is_tube8 as _t8_is, extract_video_info as tube8_extract
+from plugins.spankbang_engine import is_spankbang as _sb_is, extract_video_info as spankbang_extract
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
@@ -72,6 +79,34 @@ def is_eporner(url: str) -> bool:
 def is_terabox(url: str) -> bool:
     # Terabox detection terabox_engine me hai
     return _tb_is(url)
+
+
+def is_sxyprn(url: str) -> bool:
+    return _sxy_is(url)
+
+
+def is_pornhub(url: str) -> bool:
+    return _ph_is(url)
+
+
+def is_xvideos(url: str) -> bool:
+    return _xv_is(url)
+
+
+def is_redtube(url: str) -> bool:
+    return _rt_is(url)
+
+
+def is_youporn(url: str) -> bool:
+    return _yp_is(url)
+
+
+def is_tube8(url: str) -> bool:
+    return _t8_is(url)
+
+
+def is_spankbang(url: str) -> bool:
+    return _sb_is(url)
 
 
 def build_terabox_keyboard(tb_info, task_id=""):
@@ -153,6 +188,31 @@ def build_eporner_keyboard_from_engine(ep, task_id=""):
         inline_keyboard.append([
             InlineKeyboardButton("🎬 Send Video", callback_data=f"video|ep-720|mp4|{task_id}".encode("UTF-8")),
             InlineKeyboardButton("📁 Send File", callback_data=f"file|ep-720|mp4|{task_id}".encode("UTF-8")),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard)
+
+
+def build_generic_engine_keyboard(engine_info, task_id="", prefix="custom", site_name="Video"):
+    """Generic keyboard builder for all custom engines."""
+    inline_keyboard = []
+    for q in sorted(engine_info.get("qualities", []), key=lambda x: -int(x["height"])):
+        h = int(q["height"])
+        label = "🎬 " + q.get("label", f"{h}p")
+        cb_video = f"video|{prefix}-{h}|mp4|{task_id}"
+        cb_file = f"file|{prefix}-{h}|mp4|{task_id}"
+        inline_keyboard.append([
+            InlineKeyboardButton(label, callback_data=cb_video.encode("UTF-8")),
+            InlineKeyboardButton("📁 File", callback_data=cb_file.encode("UTF-8")),
+        ])
+    if engine_info.get("duration") is not None:
+        inline_keyboard.append([
+            InlineKeyboardButton("🎵 MP3 128K", callback_data=f"audio|128k|mp3|{task_id}".encode("UTF-8")),
+            InlineKeyboardButton("🎧 MP3 320K", callback_data=f"audio|320k|mp3|{task_id}".encode("UTF-8")),
+        ])
+    if not inline_keyboard:
+        inline_keyboard.append([
+            InlineKeyboardButton("🎬 Send Video", callback_data=f"video|{prefix}-720|mp4|{task_id}".encode("UTF-8")),
+            InlineKeyboardButton("📁 Send File", callback_data=f"file|{prefix}-720|mp4|{task_id}".encode("UTF-8")),
         ])
     return InlineKeyboardMarkup(inline_keyboard)
 
@@ -803,6 +863,256 @@ async def echo(bot, update):
             disable_web_page_preview=True,
         )
         return False
+
+    # ============================================================
+    #  Custom Engines for Adult Sites
+    #  Sxyprn, Pornhub, XVideos, RedTube, YouPorn, Tube8, SpankBang
+    # ============================================================
+    
+    # Sxyprn Handler
+    if is_sxyprn(url):
+        try:
+            loop = asyncio.get_event_loop()
+            sxy_info = await loop.run_in_executor(None, sxyprn_extract, url)
+            if sxy_info and sxy_info.get("qualities"):
+                logger.info("sxyprn custom engine OK: %s", url)
+                sxy_json = {
+                    "title": sxy_info.get("title") or "Sxyprn Video",
+                    "fulltitle": sxy_info.get("title") or "Sxyprn Video",
+                    "duration": sxy_info.get("duration"),
+                    "_sxyprn": True,
+                    "sxyprn_qualities": {str(q["height"]): q["url"] for q in sxy_info["qualities"]},
+                    "sxyprn_headers": sxy_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(sxy_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(sxy_info, task_id, "sxy", "Sxyprn")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Sxyprn video detected</b>\n\n<b>📹 Title:</b> {escape_html(sxy_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"Sxyprn engine error: {e}")
+
+    # Pornhub Handler
+    if is_pornhub(url):
+        try:
+            loop = asyncio.get_event_loop()
+            ph_info = await loop.run_in_executor(None, pornhub_extract, url)
+            if ph_info and ph_info.get("qualities"):
+                logger.info("pornhub custom engine OK: %s", url)
+                ph_json = {
+                    "title": ph_info.get("title") or "Pornhub Video",
+                    "fulltitle": ph_info.get("title") or "Pornhub Video",
+                    "duration": ph_info.get("duration"),
+                    "_pornhub": True,
+                    "pornhub_qualities": {str(q["height"]): q["url"] for q in ph_info["qualities"]},
+                    "pornhub_headers": ph_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(ph_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(ph_info, task_id, "ph", "Pornhub")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Pornhub video detected</b>\n\n<b>📹 Title:</b> {escape_html(ph_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"Pornhub engine error: {e}")
+
+    # XVideos Handler
+    if is_xvideos(url):
+        try:
+            loop = asyncio.get_event_loop()
+            xv_info = await loop.run_in_executor(None, xvideos_extract, url)
+            if xv_info and xv_info.get("qualities"):
+                logger.info("xvideos custom engine OK: %s", url)
+                xv_json = {
+                    "title": xv_info.get("title") or "XVideos Video",
+                    "fulltitle": xv_info.get("title") or "XVideos Video",
+                    "duration": xv_info.get("duration"),
+                    "_xvideos": True,
+                    "xvideos_qualities": {str(q["height"]): q["url"] for q in xv_info["qualities"]},
+                    "xvideos_headers": xv_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(xv_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(xv_info, task_id, "xv", "XVideos")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 XVideos video detected</b>\n\n<b>📹 Title:</b> {escape_html(xv_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"XVideos engine error: {e}")
+
+    # RedTube Handler
+    if is_redtube(url):
+        try:
+            loop = asyncio.get_event_loop()
+            rt_info = await loop.run_in_executor(None, redtube_extract, url)
+            if rt_info and rt_info.get("qualities"):
+                logger.info("redtube custom engine OK: %s", url)
+                rt_json = {
+                    "title": rt_info.get("title") or "RedTube Video",
+                    "fulltitle": rt_info.get("title") or "RedTube Video",
+                    "duration": rt_info.get("duration"),
+                    "_redtube": True,
+                    "redtube_qualities": {str(q["height"]): q["url"] for q in rt_info["qualities"]},
+                    "redtube_headers": rt_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(rt_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(rt_info, task_id, "rt", "RedTube")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 RedTube video detected</b>\n\n<b>📹 Title:</b> {escape_html(rt_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"RedTube engine error: {e}")
+
+    # YouPorn Handler
+    if is_youporn(url):
+        try:
+            loop = asyncio.get_event_loop()
+            yp_info = await loop.run_in_executor(None, youporn_extract, url)
+            if yp_info and yp_info.get("qualities"):
+                logger.info("youporn custom engine OK: %s", url)
+                yp_json = {
+                    "title": yp_info.get("title") or "YouPorn Video",
+                    "fulltitle": yp_info.get("title") or "YouPorn Video",
+                    "duration": yp_info.get("duration"),
+                    "_youporn": True,
+                    "youporn_qualities": {str(q["height"]): q["url"] for q in yp_info["qualities"]},
+                    "youporn_headers": yp_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(yp_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(yp_info, task_id, "yp", "YouPorn")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 YouPorn video detected</b>\n\n<b>📹 Title:</b> {escape_html(yp_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"YouPorn engine error: {e}")
+
+    # Tube8 Handler
+    if is_tube8(url):
+        try:
+            loop = asyncio.get_event_loop()
+            t8_info = await loop.run_in_executor(None, tube8_extract, url)
+            if t8_info and t8_info.get("qualities"):
+                logger.info("tube8 custom engine OK: %s", url)
+                t8_json = {
+                    "title": t8_info.get("title") or "Tube8 Video",
+                    "fulltitle": t8_info.get("title") or "Tube8 Video",
+                    "duration": t8_info.get("duration"),
+                    "_tube8": True,
+                    "tube8_qualities": {str(q["height"]): q["url"] for q in t8_info["qualities"]},
+                    "tube8_headers": t8_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(t8_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(t8_info, task_id, "t8", "Tube8")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Tube8 video detected</b>\n\n<b>📹 Title:</b> {escape_html(t8_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"Tube8 engine error: {e}")
+
+    # SpankBang Handler
+    if is_spankbang(url):
+        try:
+            loop = asyncio.get_event_loop()
+            sb_info = await loop.run_in_executor(None, spankbang_extract, url)
+            if sb_info and sb_info.get("qualities"):
+                logger.info("spankbang custom engine OK: %s", url)
+                sb_json = {
+                    "title": sb_info.get("title") or "SpankBang Video",
+                    "fulltitle": sb_info.get("title") or "SpankBang Video",
+                    "duration": sb_info.get("duration"),
+                    "_spankbang": True,
+                    "spankbang_qualities": {str(q["height"]): q["url"] for q in sb_info["qualities"]},
+                    "spankbang_headers": sb_info.get("headers") or {},
+                }
+                os.makedirs(Config.BIMBO_DOWNLOAD_LOCATION, exist_ok=True)
+                task_id = generate_task_id(update.from_user.id)
+                save_ytdl_json_path = os.path.join(
+                    Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}_{task_id}.json")
+                with open(save_ytdl_json_path, "w", encoding="utf8") as outfile:
+                    json.dump(sb_json, outfile, ensure_ascii=False)
+                
+                reply_markup = build_generic_engine_keyboard(sb_info, task_id, "sb", "SpankBang")
+                await imog.delete(True)
+                await bot.send_message(
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 SpankBang video detected</b>\n\n<b>📹 Title:</b> {escape_html(sb_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    parse_mode=enums.ParseMode.HTML,
+                    reply_to_message_id=update.id,
+                )
+                return
+        except Exception as e:
+            logger.error(f"SpankBang engine error: {e}")
 
     command_to_exec = [
         "yt-dlp",
