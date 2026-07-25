@@ -252,3 +252,46 @@ def add_to_queue(user_id: int, task_info: dict) -> int:
     queue['position'] += 1
     return len(queue['queue'])
 
+
+# =================== FLOODWAIT SAFE MESSAGE FUNCTIONS ===================
+
+async def safe_reply_text(message, text, **kwargs):
+    """Reply to message with FloodWait handling"""
+    try:
+        return await message.reply_text(text, **kwargs)
+    except FloodWait as e:
+        logger.warning(f"FloodWait: Waiting {e.value}s before reply...")
+        await asyncio.sleep(e.value)
+        return await message.reply_text(text, **kwargs)
+    except Exception as e:
+        logger.error(f"safe_reply_text error: {e}")
+        return None
+
+
+async def safe_edit_text(message, text, **kwargs):
+    """Edit message with FloodWait handling"""
+    try:
+        return await message.edit_text(text, **kwargs)
+    except FloodWait as e:
+        logger.warning(f"FloodWait: Waiting {e.value}s before edit...")
+        await asyncio.sleep(e.value)
+        return await message.edit_text(text, **kwargs)
+    except MessageNotModified:
+        return None
+    except Exception as e:
+        logger.error(f"safe_edit_text error: {e}")
+        return None
+
+
+async def safe_send_message(client, chat_id, text, **kwargs):
+    """Send message with FloodWait handling"""
+    try:
+        return await client.send_message(chat_id, text, **kwargs)
+    except FloodWait as e:
+        logger.warning(f"FloodWait: Waiting {e.value}s before send...")
+        await asyncio.sleep(e.value)
+        return await client.send_message(chat_id, text, **kwargs)
+    except Exception as e:
+        logger.error(f"safe_send_message error: {e}")
+        return None
+
