@@ -860,6 +860,84 @@ async def youtube_dl_call_back(bot, update):
         
         command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
     
+    # Wow.xxx Handler
+    elif response_json.get("_wowxxx") and youtube_dl_format.startswith("wx-"):
+        wowxxx_qualities = response_json.get("wowxxx_qualities") or {}
+        wowxxx_headers = response_json.get("wowxxx_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = wowxxx_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in wowxxx_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = wowxxx_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Wow.xxx quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = wowxxx_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # Xhand.com Handler
+    elif response_json.get("_xhand") and youtube_dl_format.startswith("xh-"):
+        xhand_qualities = response_json.get("xhand_qualities") or {}
+        xhand_headers = response_json.get("xhand_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = xhand_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in xhand_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = xhand_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Xhand quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = xhand_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
+    # Bang.com Handler
+    elif response_json.get("_bang") and youtube_dl_format.startswith("bg-"):
+        bang_qualities = response_json.get("bang_qualities") or {}
+        bang_headers = response_json.get("bang_headers") or {}
+        try:
+            _h = int(youtube_dl_format.split("-", 1)[1])
+        except Exception:
+            _h = 720
+        video_url = bang_qualities.get(str(_h))
+        if not video_url:
+            avail = sorted((int(k) for k in bang_qualities.keys()))
+            pick = min(avail, key=lambda x: abs(x - _h)) if avail else None
+            video_url = bang_qualities.get(str(pick)) if pick else None
+        
+        if not video_url:
+            await safe_edit(update.message, "ERROR: Bang.com quality URL not found 🙁")
+            asyncio.create_task(clendir(tmp_directory_for_each_user))
+            return
+        
+        hdr_args = []
+        ref = bang_headers.get("Referer")
+        if ref:
+            hdr_args += ["--add-header", f"Referer:{ref}"]
+        
+        command_to_exec = common_ytdlp_args + hdr_args + ["-o", download_directory, video_url]
+    
     elif tg_send_type == "audio":
         command_to_exec = common_ytdlp_args + [
             "--prefer-ffmpeg", "--extract-audio",
@@ -1836,7 +1914,169 @@ async def terabox_call_back(bot, update):
         
         actual_file_size = os.path.getsize(file_path)
         
-        # Check Telegram file size limit
+        # Check if file needs splitting (>1.9GB)
+        MAX_TELEGRAM_SIZE = 1900000000  # 1.9GB safe limit
+        needs_split = actual_file_size > MAX_TELEGRAM_SIZE
+        
+        if needs_split:
+            # Show split progress message
+            split_start_text = (
+                f"╭━━━〔 ✂️ LARGE FILE DETECTED 〕━━━╮\n"
+                f"┃ 📁 File: {trim_text(file_name, 30)}\n"
+                f"┃ 📦 Size: {humanbytes(actual_file_size)}\n"
+                f"┃ ⚠️ Status: Needs splitting...\n"
+                f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            )
+            await safe_edit(update.message, split_start_text)
+            
+            # Split the file
+            split_files = await split_large_file(file_path, MAX_TELEGRAM_SIZE, update.message)
+            
+            if not split_files or len(split_files) == 0:
+                await safe_edit(update.message, "❌ ERROR: Failed to split file")
+                asyncio.create_task(clendir(file_path))
+                return
+            
+            # Show split complete message
+            split_complete_text = (
+                f"╭━━━〔 ✅ SPLIT COMPLETE 〕━━━╮\n"
+                f"┃ 📁 File: {trim_text(file_name, 30)}\n"
+                f"┃ 📦 Original: {humanbytes(actual_file_size)}\n"
+                f"┃ 🔢 Parts: {len(split_files)}\n"
+                f"┃ 📤 Status: Uploading parts...\n"
+                f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            )
+            await safe_edit(update.message, split_complete_text)
+            
+            # Upload all parts with individual progress tracking
+            try:
+                start_time = time.time()
+                uploaded_parts = []
+                
+                # Generate thumbnail from ORIGINAL file (before split)
+                first_part_thumbnail = None
+                if tg_send_type == "video":
+                    try:
+                        width, height, duration = await Mdata01(file_path)
+                        duration = max(duration, 1)
+                        first_part_thumbnail = await Gthumb02(bot, update, duration, file_path, task_id)
+                        logger.info(f"Generated thumbnail from original file: {first_part_thumbnail}")
+                    except Exception as e:
+                        logger.warning(f"Failed to generate thumbnail from original file: {e}")
+                        if len(split_files) > 0:
+                            try:
+                                first_part = split_files[0]
+                                width, height, duration = await Mdata01(first_part)
+                                duration = max(duration, 1)
+                                first_part_thumbnail = await Gthumb02(bot, update, duration, first_part, task_id)
+                                logger.info(f"Generated thumbnail from first part: {first_part_thumbnail}")
+                            except Exception as e2:
+                                logger.warning(f"Failed to generate thumbnail from first part: {e2}")
+                                first_part_thumbnail = None
+                
+                for i, part_file in enumerate(split_files, 1):
+                    part_name = os.path.basename(part_file)
+                    part_size = os.path.getsize(part_file)
+                    part_caption = f"<b>Part {i}/{len(split_files)}</b>\n{escape_html(trim_text(file_name, 50))}"
+                    
+                    # Show upload progress for this part
+                    part_upload_text = (
+                        f"╭━━━〔 📤 UPLOADING PART {i}/{len(split_files)} 〕━━━╮\n"
+                        f"┃ 📁 {trim_text(part_name, 35)}\n"
+                        f"┃ 📦 Size: {humanbytes(part_size)}\n"
+                        f"┃ 🔄 Status: Uploading...\n"
+                        f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+                    )
+                    await safe_edit(update.message, part_upload_text)
+                    
+                    # Upload with progress
+                    if tg_send_type == "video":
+                        try:
+                            width, height, duration = await Mdata01(part_file)
+                            duration = max(duration, 1)
+                        except:
+                            width, height, duration = 0, 0, 0
+                        
+                        uploaded_msg = await bot.send_video(
+                            chat_id=update.message.chat.id,
+                            video=part_file,
+                            caption=part_caption,
+                            parse_mode=enums.ParseMode.HTML,
+                            duration=duration,
+                            width=width,
+                            height=height,
+                            thumb=first_part_thumbnail,
+                            supports_streaming=True,
+                            reply_to_message_id=update.message.reply_to_message.id,
+                            progress=progress_for_pyrogram,
+                            progress_args=(f"Uploading Part {i}/{len(split_files)}", update.message, time.time(), part_name, False),
+                        )
+                    else:
+                        uploaded_msg = await bot.send_document(
+                            chat_id=update.message.chat.id,
+                            document=part_file,
+                            caption=part_caption,
+                            parse_mode=enums.ParseMode.HTML,
+                            thumb=first_part_thumbnail,
+                            reply_to_message_id=update.message.reply_to_message.id,
+                            progress=progress_for_pyrogram,
+                            progress_args=(f"Uploading Part {i}/{len(split_files)}", update.message, time.time(), part_name, False),
+                        )
+                    
+                    uploaded_parts.append(uploaded_msg)
+                
+                # Cleanup thumbnail
+                if first_part_thumbnail:
+                    asyncio.create_task(clendir(first_part_thumbnail))
+                
+                # Delete progress message
+                try:
+                    await update.message.delete()
+                except:
+                    pass
+                
+                # Send success message
+                upload_duration = (time.time() - start_time)
+                minutes, seconds = divmod(int(upload_duration), 60)
+                time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+                
+                success_text = (
+                    "╭─────────────────────────────╮\n"
+                    "│ ✅ UPLOAD COMPLETE │\n"
+                    "╰─────────────────────────────╯\n"
+                    f"📁 {escape_html(trim_text(file_name, 40))}\n"
+                    f"📦 {humanbytes(actual_file_size)} • ⏱️ {time_str}\n"
+                    f"🔢 Parts: {len(split_files)} • ✂️ Split\n\n"
+                    "🔗 @Bimbobot69"
+                )
+                
+                success_msg = await bot.send_message(
+                    chat_id=update.message.chat.id,
+                    text=success_text,
+                    parse_mode=enums.ParseMode.HTML,
+                    disable_web_page_preview=True,
+                )
+                
+                # Auto-delete success message after 15 seconds
+                async def delete_success_msg():
+                    await asyncio.sleep(15)
+                    try:
+                        await success_msg.delete()
+                    except:
+                        pass
+                asyncio.create_task(delete_success_msg())
+                
+                # Cleanup
+                asyncio.create_task(clendir(file_path))
+                return
+                
+            except Exception as e:
+                logger.error(f"Split upload error: {e}")
+                await safe_edit(update.message, f"❌ ERROR: {str(e)[:200]}")
+                asyncio.create_task(clendir(file_path))
+                return
+        
+        # Check Telegram file size limit (for non-split files)
         if actual_file_size > Config.BIMBO_TG_MAX_FILE_SIZE:
             await update.message.edit(
                 f"❌ File too large ({humanbytes(actual_file_size)}). "
@@ -1845,7 +2085,7 @@ async def terabox_call_back(bot, update):
             asyncio.create_task(clendir(file_path))
             return
         
-        # Upload to Telegram
+        # Upload to Telegram (for files <= 1.9GB)
         await safe_edit(update.message, Translation.BIMBO_UPLOAD_START)
         
         thumbnail = None
