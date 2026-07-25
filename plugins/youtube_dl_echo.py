@@ -887,8 +887,7 @@ async def echo(bot, update):
     # Sxyprn Handler
     if is_sxyprn(url):
         try:
-            loop = asyncio.get_event_loop()
-            sxy_info = await loop.run_in_executor(None, sxyprn_extract, url)
+            sxy_info = await sxyprn_extract(url)
             if sxy_info and sxy_info.get("qualities"):
                 logger.info("sxyprn custom engine OK: %s", url)
                 sxy_json = {
@@ -923,7 +922,7 @@ async def echo(bot, update):
     if is_pornhub(url):
         try:
             loop = asyncio.get_event_loop()
-            ph_info = await loop.run_in_executor(None, pornhub_extract, url)
+            ph_info = await pornhub_extract(url)
             if ph_info and ph_info.get("qualities"):
                 logger.info("pornhub custom engine OK: %s", url)
                 ph_json = {
@@ -958,7 +957,7 @@ async def echo(bot, update):
     if is_xvideos(url):
         try:
             loop = asyncio.get_event_loop()
-            xv_info = await loop.run_in_executor(None, xvideos_extract, url)
+            xv_info = await xvideos_extract(url)
             if xv_info and xv_info.get("qualities"):
                 logger.info("xvideos custom engine OK: %s", url)
                 xv_json = {
@@ -993,7 +992,7 @@ async def echo(bot, update):
     if is_redtube(url):
         try:
             loop = asyncio.get_event_loop()
-            rt_info = await loop.run_in_executor(None, redtube_extract, url)
+            rt_info = await redtube_extract(url)
             if rt_info and rt_info.get("qualities"):
                 logger.info("redtube custom engine OK: %s", url)
                 rt_json = {
@@ -1028,7 +1027,7 @@ async def echo(bot, update):
     if is_youporn(url):
         try:
             loop = asyncio.get_event_loop()
-            yp_info = await loop.run_in_executor(None, youporn_extract, url)
+            yp_info = await youporn_extract(url)
             if yp_info and yp_info.get("qualities"):
                 logger.info("youporn custom engine OK: %s", url)
                 yp_json = {
@@ -1063,7 +1062,7 @@ async def echo(bot, update):
     if is_tube8(url):
         try:
             loop = asyncio.get_event_loop()
-            t8_info = await loop.run_in_executor(None, tube8_extract, url)
+            t8_info = await tube8_extract(url)
             if t8_info and t8_info.get("qualities"):
                 logger.info("tube8 custom engine OK: %s", url)
                 t8_json = {
@@ -1098,7 +1097,7 @@ async def echo(bot, update):
     if is_spankbang(url):
         try:
             loop = asyncio.get_event_loop()
-            sb_info = await loop.run_in_executor(None, spankbang_extract, url)
+            sb_info = await spankbang_extract(url)
             if sb_info and sb_info.get("qualities"):
                 logger.info("spankbang custom engine OK: %s", url)
                 sb_json = {
@@ -1133,7 +1132,7 @@ async def echo(bot, update):
     if is_wowxxx(url):
         try:
             loop = asyncio.get_event_loop()
-            wx_info = await loop.run_in_executor(None, wowxxx_extract, url)
+            wx_info = await wowxxx_extract(url)
             if wx_info and wx_info.get("qualities"):
                 logger.info("wowxxx custom engine OK: %s", url)
                 wx_json = {
@@ -1168,7 +1167,7 @@ async def echo(bot, update):
     if is_xhand(url):
         try:
             loop = asyncio.get_event_loop()
-            xh_info = await loop.run_in_executor(None, xhand_extract, url)
+            xh_info = await xhand_extract(url)
             if xh_info and xh_info.get("qualities"):
                 logger.info("xhand custom engine OK: %s", url)
                 xh_json = {
@@ -1203,7 +1202,7 @@ async def echo(bot, update):
     if is_bang(url):
         try:
             loop = asyncio.get_event_loop()
-            bg_info = await loop.run_in_executor(None, bang_extract, url)
+            bg_info = await bang_extract(url)
             if bg_info and bg_info.get("qualities"):
                 logger.info("bang custom engine OK: %s", url)
                 bg_json = {
@@ -1282,18 +1281,61 @@ async def echo(bot, update):
         except Exception as e:
             logger.error(f"Direct download check error: {e}")
 
-        if "This video is only available for registered users." in e_response or "Sign in" in e_response:
+        if "primarily used for piracy" in e_response or "Piracy" in e_response:
+            error_message = (
+                "<b>⚠️ Piracy Website Detected</b>\n\n"
+                "Yeh website piracy ke liye use hoti hai aur yt-dlp isko support nahi karta.\n\n"
+                "Kripya koi aur website try karein ya direct video link bhejein."
+            )
+        elif "This video is only available for registered users." in e_response or "Sign in" in e_response:
             error_message = (
                 "<b>🔐 Login required for this link</b>\n\n"
                 "Use this format:\n"
                 "<code>URL | filename | username | password</code>\n\n"
                 "Or add <code>cookies.txt</code> to the bot files."
             )
+        elif "Unsupported URL" in e_response or "No supported extractor" in e_response:
+            error_message = (
+                "<b>❌ Unsupported URL</b>\n\n"
+                "Yeh URL supported nahi hai.\n\n"
+                "Supported websites:\n"
+                "• YouTube\n"
+                "• xHamster\n"
+                "• Eporner\n"
+                "• Pornhub\n"
+                "• XVideos\n"
+                "• RedTube\n"
+                "• YouPorn\n"
+                "• Tube8\n"
+                "• SpankBang\n"
+                "• Sxyprn\n"
+                "• Wow.xxx\n"
+                "• Xhand\n"
+                "• Bang.com\n"
+                "• Instagram\n"
+                "• Twitter\n"
+                "• Facebook\n"
+                "• Aur 1000+ aur websites\n\n"
+                "Kripya valid URL bhejein."
+            )
+        elif "Private video" in e_response or "deleted" in e_response:
+            error_message = (
+                "<b>🚫 Video Unavailable</b>\n\n"
+                "Yeh video private hai ya delete ho chuki hai."
+            )
+        elif "Age-restricted" in e_response or "18+" in e_response:
+            error_message = (
+                "<b>🔞 Age-Restricted Content</b>\n\n"
+                "Yeh video age-restricted hai.\n"
+                "Login format use karein:\n"
+                "<code>URL | filename | username | password</code>"
+            )
         else:
             actual_error = escape_html(e_response.split('\n')[0][:250] or "Invalid or unsupported URL")
             error_message = (
-                "<b>❌ Invalid or unsupported URL</b>\n\n"
-                f"<b>Reason:</b> <code>{actual_error}</code>"
+                "<b>❌ Download Failed</b>\n\n"
+                f"<b>Reason:</b> <code>{actual_error}</code>\n\n"
+                "Kripya valid URL bhejein ya baad me try karein."
             )
 
         await bot.send_message(
