@@ -524,10 +524,11 @@ async def youtube_dl_call_back(bot, update):
         "--newline",
         "--geo-bypass",
         "--force-ipv4",  # Force IPv4 - Koyeb servers don't support IPv6
+        "--socket-timeout", "30",  # Increase timeout to 30s (default 20s)
+        "--retries", "20",  # More retries
+        "--fragment-retries", "20",
         "--buffer-size", _buffer_size,
         "--http-chunk-size", _chunk_size,
-        "--retries", "10",
-        "--fragment-retries", "10",
         "--retry-sleep", "3",
         "--concurrent-fragments", str(_concurrent_frags),
         "--throttled-rate", "100K",
@@ -632,6 +633,7 @@ async def youtube_dl_call_back(bot, update):
 
         # FIX: Replace DE CDN with FR CDN (DE blocked on Koyeb EU)
         import re as _re
+        
         if '-de-cdn.eporner.com' in video_url:
             # Replace DE CDN with known working FR CDN nodes
             _fr_cdns = [
@@ -1005,6 +1007,7 @@ async def youtube_dl_call_back(bot, update):
 
                 # FIX: Replace DE CDN with FR CDN (DE blocked on Koyeb EU)
                 import re as _re
+                
                 if '-de-cdn.eporner.com' in fresh_url:
                     _fr_cdns = [
                         'vid-s2-s50-fr-cdn.eporner.com',
