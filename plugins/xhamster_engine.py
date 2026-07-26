@@ -14,6 +14,7 @@ import time
 from urllib.parse import urlparse, unquote
 
 import requests
+from plugins.proxy_rotator import get_proxy_dict, mark_proxy_failed
 
 logger = logging.getLogger(__name__)
 
@@ -579,9 +580,10 @@ def extract(url: str, cookies_file: str = None):
     # Rate limiting prevention: requests ke beech me delay
     _last_request_time = 0
     _min_delay = 1.5  # Minimum 1.5 seconds between requests
+    _proxy = None
 
     def fetch_page(page_url, max_retries=3):
-        nonlocal _last_request_time
+        nonlocal _last_request_time, _proxy
         
         page_url = _clean_xhamster_page_url(page_url)
         page_base = _base_of(page_url)
@@ -601,11 +603,27 @@ def extract(url: str, cookies_file: str = None):
         
         for attempt in range(max_retries):
             try:
-                response = session.get(page_url, headers=h, cookies=cookies, timeout=25, allow_redirects=True)
+                # Get proxy for this request (auto-rotates)
+                current_proxy = get_proxy_dict()
+                
+                # Use proxy if available
+                if current_proxy:
+                    _proxy = current_proxy
+                    logger.info(f"xhamster: using proxy {current_proxy['http']}")
+                    response = session.get(page_url, headers=h, cookies=cookies, 
+                                         timeout=25, allow_redirects=True, proxies=current_proxy)
+                else:
+                    response = session.get(page_url, headers=h, cookies=cookies, 
+                                         timeout=25, allow_redirects=True)
+                
                 _last_request_time = time.time()  # Update last request time
                 
                 # Check for rate limit
                 if response.status_code == 429:
+                    if current_proxy:
+                        # Mark proxy as failed if it gave rate limit
+                        mark_proxy_failed(current_proxy)
+                    
                     if attempt < max_retries - 1:
                         wait_time = (2 ** attempt) + 1  # Exponential backoff: 2s, 4s, 8s
                         logger.warning(f"xhamster: rate limited, waiting {wait_time}s (attempt {attempt+1}/{max_retries})")
@@ -616,6 +634,10 @@ def extract(url: str, cookies_file: str = None):
                 
                 return response
             except requests.exceptions.RequestException as e:
+                # Mark proxy as failed if it caused an error
+                if _proxy:
+                    mark_proxy_failed(_proxy)
+                
                 if attempt < max_retries - 1:
                     wait_time = (2 ** attempt) + 1
                     logger.warning(f"xhamster: request error, retrying in {wait_time}s: {e}")
