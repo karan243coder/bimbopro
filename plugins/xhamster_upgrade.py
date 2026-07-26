@@ -42,7 +42,6 @@ from config import Config
 from utils import (
     safe_filename, user_download_dir, cleanup_dir, humanbytes, run_cmd,
     is_admin, is_premium, rate_limit_check, get_url,
-    safe_reply_text, safe_edit_text,
 )
 from database.xhamster_queue import create_job, get_job, claim_next_item, finish_item, update_job, cancel_job, pause_job, resume_job
 from plugins.xhamster_engine import (
@@ -596,10 +595,10 @@ def _extract_profile(html: str, base: str):
 @Client.on_message(filters.private & _cmd("xhs", "xhsearch"))
 async def cmd_xh_search(client: Client, m: Message):
     if not await _xh_vip_allowed(m):
-        return await safe_reply_text(m, _XH_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await m.reply_text(_XH_VIP_DENY_TEXT, disable_web_page_preview=True)
     parts = (m.text or "").split(None, 1)
     if len(parts) < 2:
-        return await safe_reply_text(m, "Usage: <code>/xhs search query</code>")
+        return await m.reply_text("Usage: <code>/xhs search query</code>")
     q = parts[1].strip()
     # /xhs also accepts a direct public profile/channel/search URL.
     # Previously a URL was incorrectly encoded as a search query, which
@@ -613,17 +612,7 @@ async def cmd_xh_search(client: Client, m: Message):
             section = (sec_m.group(1).lower() if sec_m else "pornstars")
             if section == "pornstar-channels":
                 section = "channels"
-            
-            # Preserve sorting suffixes if present (longest, popular, newest, etc.)
-            _suffix = "videos"
-            for s_term in ("longest", "popular", "newest", "top-rated", "new-videos"):
-                if s_term in clean.lower():
-                    if s_term == "newest" or s_term == "new-videos":
-                        _suffix = "videos-new-videos"
-                    else:
-                        _suffix = f"videos-{s_term}"
-                    break
-            url = f"{urlparse(clean).scheme}://{urlparse(clean).netloc}/{section}/{username}/{_suffix}"
+            url = f"{urlparse(clean).scheme}://{urlparse(clean).netloc}/{section}/{username}/videos"
             return await _send_listing(client, m, url, title="🔞 Creator Profile")
         return await _send_listing(client, m, clean, title="🔞 xHamster Listing")
     url = f"https://xhamster46.desi/search/{quote(q)}"
@@ -633,34 +622,34 @@ async def cmd_xh_search(client: Client, m: Message):
 @Client.on_message(filters.private & _cmd("xhg", "xhgallery"))
 async def cmd_xh_gallery(client: Client, m: Message):
     if not await _xh_vip_allowed(m):
-        return await safe_reply_text(m, _XH_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await m.reply_text(_XH_VIP_DENY_TEXT, disable_web_page_preview=True)
     parts = (m.text or "").split(None, 1)
     url = parts[1] if len(parts) > 1 else ""
     if m.reply_to_message and m.reply_to_message.text:
         url = m.reply_to_message.text
     url = get_url(url)
     if not url or not is_xhamster(url) or "gallery" not in url.lower():
-        return await safe_reply_text(m, "Usage: <code>/xhg https://xhamster.com/gallery/...</code>")
+        return await m.reply_text("Usage: <code>/xhg https://xhamster.com/gallery/...</code>")
     uid = m.from_user.id
     work = user_download_dir(uid) + f"/xh_g_{int(time.time())}"
     os.makedirs(work, exist_ok=True)
-    msg = await safe_reply_text(m, "🔞 Downloading xHamster gallery...")
+    msg = await m.reply_text("🔞 Downloading xHamster gallery...")
     try:
         async with aiohttp.ClientSession() as s:
             code, html, final_url = await _xh_get(s, url)
             if code != 200:
-                return await safe_edit_text(msg, f"❌ xHamster HTTP {code}\n\n🌐 Page: <code>{final_url[:180]}</code>")
+                return await msg.edit_text(f"❌ xHamster HTTP {code}\n\n🌐 Page: <code>{final_url[:180]}</code>")
             title, imgs = _extract_gallery(html, final_url)
             if not imgs:
-                return await safe_edit_text(msg, "❌ Gallery me photos nahi mile (page may be 18+ login wall or blocked).")
-            await safe_edit_text(msg, f"🖼️ **{title[:80]}**\n📥 Downloading {len(imgs)} photos...")
+                return await msg.edit_text("❌ Gallery me photos nahi mile (page may be 18+ login wall or blocked).")
+            await msg.edit_text(f"🖼️ **{title[:80]}**\n📥 Downloading {len(imgs)} photos...")
             done = {"n": 0}
 
             async def prog(done_n, total):
                 done["n"] = done_n
                 if done_n % 10 == 0 or done_n == total:
                     try:
-                        await safe_edit_text(msg, 
+                        await msg.edit_text(
                             f"🖼️ **{title[:60]}**\n📥 Photos: {done_n}/{total}"
                         )
                     except Exception:
@@ -668,18 +657,18 @@ async def cmd_xh_gallery(client: Client, m: Message):
 
             paths = await _download_gallery_images(s, imgs, work, progress=prog)
             if not paths:
-                return await safe_edit_text(msg, "❌ Photos download nahi ho paaye.")
-            await safe_edit_text(msg, f"📤 Uploading {len(paths)} photos as album...")
+                return await msg.edit_text("❌ Photos download nahi ho paaye.")
+            await msg.edit_text(f"📤 Uploading {len(paths)} photos as album...")
             # Send as media groups (max 10 per message)
             for i in range(0, len(paths), 10):
                 group = [InputMediaPhoto(p) for p in paths[i:i+10]]
                 await client.send_media_group(m.chat.id, group, reply_to_message_id=m.id)
                 await asyncio.sleep(1)
             await msg.delete()
-            await safe_reply_text(m, f"✅ **{title[:60]}**\n📸 {len(paths)} photos sent.")
+            await m.reply_text(f"✅ **{title[:60]}**\n📸 {len(paths)} photos sent.")
     except Exception as e:
         logger.exception("xhg")
-        await safe_edit_text(msg, f"❌ Error: <code>{e}</code>")
+        await msg.edit_text(f"❌ Error: <code>{e}</code>")
     finally:
         asyncio.create_task(cleanup_dir(work))
 
@@ -687,14 +676,14 @@ async def cmd_xh_gallery(client: Client, m: Message):
 @Client.on_message(filters.private & _cmd("xhp", "xhprofile", "xhuser"))
 async def cmd_xh_profile(client: Client, m: Message):
     if not await _xh_vip_allowed(m):
-        return await safe_reply_text(m, _XH_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await m.reply_text(_XH_VIP_DENY_TEXT, disable_web_page_preview=True)
     parts = (m.text or "").split(None, 1)
     url = parts[1] if len(parts) > 1 else ""
     if m.reply_to_message and m.reply_to_message.text:
         url = m.reply_to_message.text
     url = get_url(url)
     if not url or not is_xhamster(url):
-        return await safe_reply_text(m, "Usage: <code>/xhp https://xhamster.com/creators/NAME</code>\n"
+        return await m.reply_text("Usage: <code>/xhp https://xhamster.com/creators/NAME</code>\n"
                                    "Or /xhp https://xhamster.com/pornstars/NAME or /channels/NAME")
     # Preserve the exact public listing/tab supplied by the user. Only a
     # bare profile root gets the /videos fallback; /full-length/newest,
@@ -753,7 +742,7 @@ async def cmd_xh_auto(client: Client, m: Message):
                 "Search, Profile, Gallery, Paginated listings — sirf premium/admin ke liye. "
                 "Owner @bimbobot69 se sampark karo."
             )
-        return await safe_reply_text(m, base, disable_web_page_preview=True)
+        return await m.reply_text(base, disable_web_page_preview=True)
 
     t = _xh_type(url)
     # Single video: SABKE LIYE available (free users bhi use kar sakte hain).
@@ -761,7 +750,7 @@ async def cmd_xh_auto(client: Client, m: Message):
     # pakad lega aur xhamster_engine se qualities nikal ke quality buttons show kar dega.
     # Yaha bas confirmation dete hain aur wapas aate hain — extra echo NAHI bhejte (warna duplicate aayega).
     if t == "video":
-        await safe_reply_text(m, 
+        await m.reply_text(
             f"🔞 <b>xHamster Video Detected</b>\n"
             f"<code>{url[:150]}</code>\n\n"
             f"🔄 Quality buttons load ho rahe hain, thoda wait karo..."
@@ -770,7 +759,7 @@ async def cmd_xh_auto(client: Client, m: Message):
 
     # Non-video types (gallery/profile/search/tag) => VIP only
     if not is_vip:
-        return await safe_reply_text(m, _XH_VIP_DENY_TEXT, disable_web_page_preview=True)
+        return await m.reply_text(_XH_VIP_DENY_TEXT, disable_web_page_preview=True)
 
     if t == "gallery":
         m.text = f"/xhg {url}"; m.command = ["xhg", url]
@@ -781,7 +770,7 @@ async def cmd_xh_auto(client: Client, m: Message):
     elif t in ("search", "tag"):
         await _send_listing(client, m, url)
     else:
-        await safe_reply_text(m, f"🔞 URL type samajh nahi aaya: {url}\n\nSingle video link bhejo ya premium features ke liye /xhs /xhg /xhp use karo.")
+        await m.reply_text(f"🔞 URL type samajh nahi aaya: {url}\n\nSingle video link bhejo ya premium features ke liye /xhs /xhg /xhp use karo.")
 
 
 # ================== In-memory store for paginated listings (to keep cb_data < 64 bytes) ==================
@@ -854,12 +843,12 @@ def _quality_kbd(token, idx, qlts):
 
 
 async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞 xHamster"):
-    msg = await safe_reply_text(m, f"{title}\n🔍 Loading...")
+    msg = await m.reply_text(f"{title}\n🔍 Loading...")
     try:
         async with aiohttp.ClientSession() as s:
             code, html, final_url = await _xh_get(s, url)
             if code != 200:
-                return await safe_edit_text(msg, f"❌ HTTP {code}")
+                return await msg.edit_text(f"❌ HTTP {code}")
             items, next_page = _extract_search(html, final_url)
             pname = None
             if RE_CREATOR.search(final_url):
@@ -869,7 +858,7 @@ async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞
             # Always sort shortest-first
             items = _sort_videos_by_duration(items)
             if not items:
-                return await safe_edit_text(msg, 
+                return await msg.edit_text(
                     f"❌ Koi video nahi mila.\n\n"
                     f"HTTP: <code>{code}</code>\n"
                     f"Page: <code>{final_url[:180]}</code>\n"
@@ -884,10 +873,10 @@ async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞
                 t = re.sub(r"\s+", " ", v["title"])[:35]
                 dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                 text += f"\n{i}. {t}{dur}"
-            await safe_edit_text(msg, text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long", kind=_LISTING_STORE[token].get("kind", "channel")))
+            await msg.edit_text(text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long", kind=_LISTING_STORE[token].get("kind", "channel")))
     except Exception as e:
         logger.exception("xh listing")
-        await safe_edit_text(msg, f"❌ Error: <code>{e}</code>")
+        await msg.edit_text(f"❌ Error: <code>{e}</code>")
 
 
 def _store_listing(items, next_page, title="🔞 xHamster", current_url="", prev_url=""):
@@ -916,8 +905,8 @@ async def _safe_answer(c: CallbackQuery, text: str = "", show_alert: bool = Fals
         pass
 
 
-# Concurrency limiter for Download All - uses shared global semaphore
-# Semaphore removed - using background tasks
+# Concurrency limiter for Download All (max 2 simultaneous downloads on Koyeb free 512MB RAM)
+_XH_DOWNLOAD_SEM = asyncio.Semaphore(2)
 
 
 async def _xh_fetch_qualities_for_item(item, session: aiohttp.ClientSession):
@@ -1002,7 +991,7 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
             item = await claim_next_item(job_id)
             if not item:
                 await update_job(job_id, status="completed")
-                try: await safe_edit_text(status_msg, f"✅ Full channel queue complete\n\nDone: {completed} | Failed: {failed}")
+                try: await status_msg.edit_text(f"✅ Full channel queue complete\n\nDone: {completed} | Failed: {failed}")
                 except Exception: pass
                 return
             idx = item.get("index", 0) + 1
@@ -1010,7 +999,7 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
             current_job = await get_job(job_id)
             total = len((current_job or {}).get("items", []))
             try:
-                await safe_edit_text(status_msg, f"📥 Full channel queue\n\n🔽 {idx}/{total} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}\n📋 Total videos: {total}")
+                await status_msg.edit_text(f"📥 Full channel queue\n\n🔽 {idx}/{total} processing\n🎬 {title[:70]}\n✅ Done: {completed} | ❌ Failed: {failed}\n📋 Total videos: {total}")
             except Exception: pass
             # Reuse the stable existing downloader; quality extraction is per item.
             async with aiohttp.ClientSession() as session:
@@ -1045,7 +1034,7 @@ async def _xh_full_queue_worker(client, job_id, user, status_msg):
     except Exception as exc:
         await update_job(job_id, status="paused", last_error=str(exc)[:500])
         logger.exception("xh full queue worker stopped")
-        try: await safe_edit_text(status_msg, f"⚠️ Queue paused safely\nDone: {completed} | Failed: {failed}\nError: {str(exc)[:300]}")
+        try: await status_msg.edit_text(f"⚠️ Queue paused safely\nDone: {completed} | Failed: {failed}\nError: {str(exc)[:300]}")
         except Exception: pass
 
 
@@ -1079,13 +1068,13 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
             try:
                 all_items = await _xh_collect_all_pages(entry.get("current_url") or entry.get("next"), None)
                 if not all_items:
-                    return await safe_edit_text(status_msg, "❌ No videos found for queue.")
+                    return await status_msg.edit_text("❌ No videos found for queue.")
                 job_id = await create_job(c.from_user.id, c.message.chat.id, entry.get("title", "xHamster Channel"), entry.get("current_url", ""), all_items)
-                await safe_edit_text(status_msg, f"✅ Queue created\n\n📋 Videos: {len(all_items)}\n⚡ Mode: 1-by-1\n📦 Max quality\n🔁 Restart-safe queue")
+                await status_msg.edit_text(f"✅ Queue created\n\n📋 Videos: {len(all_items)}\n⚡ Mode: 1-by-1\n📦 Max quality\n🔁 Restart-safe queue")
                 asyncio.create_task(_xh_full_queue_worker(client, job_id, c.from_user, status_msg))
             except Exception as exc:
                 logger.exception("xh full queue create failed")
-                await safe_edit_text(status_msg, f"❌ Queue create failed: <code>{str(exc)[:500]}</code>")
+                await status_msg.edit_text(f"❌ Queue create failed: <code>{str(exc)[:500]}</code>")
             return
 
         # ---------- DOWNLOAD ALL on current page (BEST available quality per video) ----------
@@ -1109,7 +1098,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                     for i, item in enumerate(items, 1):
                         short_title = (item.get("title", "") or "video")[:40]
                         try:
-                            await safe_edit_text(status_msg, 
+                            await status_msg.edit_text(
                                 f"⬇️ **Preparing Download All**\n\n"
                                 f"🔍 Checking video {i}/{len(items)}: {short_title}..."
                             )
@@ -1135,7 +1124,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
 
             # Step 2: Launch downloads (semaphore limits concurrency to max 2 for Koyeb 512MB safety)
             async def _run_one(job):
-                if True:  # Semaphore removed
+                async with _XH_DOWNLOAD_SEM:
                     item = job["item"]
                     title = item.get("title", "Video")
                     i = job["idx"]
@@ -1166,7 +1155,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                 await asyncio.sleep(1)  # small stagger between starts
 
             try:
-                await safe_edit_text(status_msg, 
+                await status_msg.edit_text(
                     f"✅ **Download All Started!**\n\n"
                     f"📥 {len(items)} videos queue me hain (best quality per video).\n"
                     f"⚡ Max 2 concurrent downloads (Koyeb RAM-safe).\n"
@@ -1236,7 +1225,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                     dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                     text += f"\n{i}. {t}{dur}"
                 entry["page"] = page
-                await safe_edit_text(m, text, reply_markup=_listing_kbd(token, items, bool(np or old_next), page, entry.get("sort", "long")))
+                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np or old_next), page, entry.get("sort", "long")))
                 await _safe_answer(c)
             except Exception as e:
                 logger.exception("xh prevpg"); await _safe_answer(c, f"Err: {e}", show_alert=True)
@@ -1275,7 +1264,7 @@ async def xh_callbacks(client: Client, c: CallbackQuery):
                     dur = f" ⏱{v['duration']}" if v.get("duration") else ""
                     text += f"\n{i}. {t}{dur}"
                 entry["page"] = new_page
-                await safe_edit_text(m, text, reply_markup=_listing_kbd(token, items, bool(np), current_page=new_page, sort_mode=entry.get("sort", "long"), kind=entry.get("kind", "channel")))
+                await m.edit_text(text, reply_markup=_listing_kbd(token, items, bool(np), current_page=new_page, sort_mode=entry.get("sort", "long"), kind=entry.get("kind", "channel")))
                 await _safe_answer(c)
             except Exception as e:
                 logger.exception("xh pg")
@@ -1501,7 +1490,7 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
                     dl_text = _hb(downloaded_bytes) if downloaded_bytes else f"{pct:.1f}%"
                     tt_text = _hb(total_bytes) if total_bytes else "??"
                     try:
-                        await safe_edit_text(status_msg, 
+                        await status_msg.edit_text(
                             f"📥 **Downloading...**\n\n"
                             f"🎬 {safe_title[:60]}\n"
                             f"┃ `{bar}` {pct:.1f}%\n"
@@ -1529,7 +1518,7 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
             if os.path.isfile(p) and f.startswith(safe_title[:40]):
                 final_file = p; break
     if proc.returncode != 0 or not final_file:
-        return await safe_edit_text(status_msg, 
+        return await status_msg.edit_text(
             f"❌ **Download failed** (code {proc.returncode})\n\n"
             f"URL: {webpage_url}\n\n"
             f"Try again ya direct link alag quality se download karo."
@@ -1544,19 +1533,19 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
     parts_to_upload = [final_file]
 
     if needs_split:
-        await safe_edit_text(status_msg, 
+        await status_msg.edit_text(
             f"✂️ **Large File Detected**\n\n"
             f"🎬 {safe_title[:50]}\n"
             f"📦 Size: {humanbytes(fsize)} → splitting into parts for Telegram..."
         )
         parts_to_upload = await _split_large_video(final_file, MAX_TG_SIZE, status_msg=status_msg)
-        await safe_edit_text(status_msg, 
+        await status_msg.edit_text(
             f"✅ **Split Complete**\n\n"
             f"📦 {len(parts_to_upload)} parts ready\n"
             f"📤 Uploading parts one by one..."
         )
     else:
-        await safe_edit_text(status_msg, f"📤 **Uploading to Telegram...**\n\n📦 {humanbytes(fsize)} | ⏱ Downloaded in {elapsed_dl}s")
+        await status_msg.edit_text(f"📤 **Uploading to Telegram...**\n\n📦 {humanbytes(fsize)} | ⏱ Downloaded in {elapsed_dl}s")
 
     try:
         caption = f"🎬 **{safe_title}**\n📥 {height}p | ⚡ BIMBO"
@@ -1604,7 +1593,7 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
 
             # Update status for this part
             try:
-                await safe_edit_text(status_msg, 
+                await status_msg.edit_text(
                     f"📤 **Uploading...**\n\n"
                     f"🎬 {safe_title[:45]}\n"
                     f"📦 Part {part_idx}/{total_parts} | {humanbytes(part_size)}\n"
@@ -1657,7 +1646,7 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
         elapsed_total = time_formatter_delta(time.time() - start_ts)
         try:
             if total_parts > 1:
-                await safe_edit_text(status_msg, 
+                await status_msg.edit_text(
                     f"✅ **Download Complete!**\n\n"
                     f"🎬 {safe_title[:60]}\n"
                     f"📥 Quality: {height}p | {mode.upper()}\n"
@@ -1665,7 +1654,7 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
                     f"⏱ Total time: {elapsed_total}"
                 )
             else:
-                await safe_edit_text(status_msg, 
+                await status_msg.edit_text(
                     f"✅ **Download Complete!**\n\n"
                     f"🎬 {safe_title[:60]}\n"
                     f"📥 Quality: {height}p | {mode.upper()}\n"
@@ -1714,7 +1703,7 @@ async def _xh_download_and_upload(client, status_msg, user, webpage_url, m3u8_ur
     except Exception as e:
         logger.exception("xh upload err")
         try:
-            await safe_edit_text(status_msg, f"❌ Upload failed: <code>{e}</code>")
+            await status_msg.edit_text(f"❌ Upload failed: <code>{e}</code>")
         except Exception:
             pass
     finally:
@@ -1836,7 +1825,7 @@ async def _split_large_video(file_path: str, max_size_bytes: int = 1900000000, s
             pct = ((i+1)/num_parts)*100
             elapsed = int(time.time() - split_start)
             try:
-                await safe_edit_text(status_msg, 
+                await status_msg.edit_text(
                     f"✂️ **Splitting Large File**\n\n"
                     f"🎬 {base[:50]}\n"
                     f"┃ `{_bar(pct)}` {pct:.0f}%\n"
