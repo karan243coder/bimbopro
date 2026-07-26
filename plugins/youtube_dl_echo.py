@@ -615,8 +615,17 @@ async def echo(bot, update):
                         _sec = _sec_m.group(1).lower() if _sec_m else "creators"
                         if _sec in ("pornstar-channels", "channels"):
                             _sec = "channels"
-                        # Use /videos (correct listing endpoint — /videos-porn returns 404 on desi mirrors)
-                        _u = f"https://xhamster46.desi/{_sec}/{_uname}/videos"
+                        
+                        # Preserve sorting suffixes if present (longest, popular, newest, etc.)
+                        _suffix = "videos"
+                        for s_term in ("longest", "popular", "newest", "top-rated", "new-videos"):
+                            if s_term in url.lower():
+                                if s_term == "newest" or s_term == "new-videos":
+                                    _suffix = "videos-new-videos"
+                                else:
+                                    _suffix = f"videos-{s_term}"
+                                break
+                        _u = f"https://xhamster46.desi/{_sec}/{_uname}/{_suffix}"
                     # Determine title
                     if "/gallery" in _p or "/photos" in _p:
                         await imog.edit(
@@ -1408,3 +1417,4 @@ async def echo(bot, update):
             parse_mode=enums.ParseMode.HTML,
             reply_to_message_id=update.id,
         )
+
