@@ -613,7 +613,17 @@ async def cmd_xh_search(client: Client, m: Message):
             section = (sec_m.group(1).lower() if sec_m else "pornstars")
             if section == "pornstar-channels":
                 section = "channels"
-            url = f"{urlparse(clean).scheme}://{urlparse(clean).netloc}/{section}/{username}/videos"
+            
+            # Preserve sorting suffixes if present (longest, popular, newest, etc.)
+            _suffix = "videos"
+            for s_term in ("longest", "popular", "newest", "top-rated", "new-videos"):
+                if s_term in clean.lower():
+                    if s_term == "newest" or s_term == "new-videos":
+                        _suffix = "videos-new-videos"
+                    else:
+                        _suffix = f"videos-{s_term}"
+                    break
+            url = f"{urlparse(clean).scheme}://{urlparse(clean).netloc}/{section}/{username}/{_suffix}"
             return await _send_listing(client, m, url, title="🔞 Creator Profile")
         return await _send_listing(client, m, clean, title="🔞 xHamster Listing")
     url = f"https://xhamster46.desi/search/{quote(q)}"
