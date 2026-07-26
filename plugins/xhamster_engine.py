@@ -543,7 +543,7 @@ def _extract_from_html(html: str, page_url: str):
     }
 
 
-def extract(url: str, cookies_file: str = None):
+def _extract_inner(url: str, cookies_file: str = None):
     desktop = _clean_xhamster_page_url(_to_desktop(url))
     base = _base_of(desktop)
     headers = {
@@ -619,6 +619,23 @@ def extract(url: str, cookies_file: str = None):
     except Exception as e:
         logger.warning("xh extract error: %s", e)
         return None
+
+
+def extract(url: str, cookies_file: str = None):
+    # Try with cookies first
+    res = _extract_inner(url, cookies_file)
+    if res and res.get("qualities"):
+        return res
+        
+    # If it failed to extract qualities, try WITHOUT cookies as fallback!
+    if cookies_file:
+        logger.info("xhamster: cookie-based extraction failed or blocked (status 429), retrying cleanly WITHOUT cookies...")
+        res_no_cookies = _extract_inner(url, None)
+        if res_no_cookies and res_no_cookies.get("qualities"):
+            logger.info("✅ xhamster: unblocked and successfully extracted WITHOUT cookies!")
+            return res_no_cookies
+            
+    return res
 
 
 if __name__ == "__main__":
