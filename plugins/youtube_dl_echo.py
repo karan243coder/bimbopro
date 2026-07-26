@@ -587,13 +587,13 @@ async def echo(bot, update):
     if is_xhamster(url):
         # Sirf single video URLs pe hi apna engine chalao
         _p = urlparse(url).path.lower()
-        _is_single_video = ("/videos/" in _p or "/creators/" in _p or "/users/" in _p or 
-                           "/pornstars/" in _p or "/channels/" in _p) and not any(
-            k in _p for k in ("/gallery", "/photos/", "/search", "/categories/",
+        _is_single_video = ("/videos/" in _p) and not any(
+            k in _p for k in ("/creators/", "/users/", "/pornstars/", "/channels/",
+                              "/gallery", "/photos/", "/search", "/categories/",
                               "/tags/", "/models/")
         )
         if not _is_single_video:
-            # Non-video xhamster URL (gallery/search)
+            # Non-video xhamster URL (creator/profile/gallery/search)
             uid = update.from_user.id if update.from_user else 0
             try:
                 from utils import is_admin as _ia, is_premium as _ip

@@ -566,13 +566,10 @@ async def youtube_dl_call_back(bot, update):
     if Config.BIMBO_HTTP_PROXY != "":
         common_ytdlp_args.extend(["--proxy", Config.BIMBO_HTTP_PROXY])
 
-    # Cookies only for non-custom-engine downloads (xhamster/eporner CDN tokens
-    # can conflict with xhamster cookies loaded from cookies.txt)
-    # For custom engines, cookies are added selectively below.
-    _cookies_for_custom_engines = False  # skip cookies for xh/ep engines
-    if not is_xh_engine and not is_ep_engine:
-        if os.path.exists("cookies.txt"):
-            common_ytdlp_args.extend(["--cookies", "cookies.txt"])
+    # Cookies hamesha add karo - xhamster/eporner CDN ko chahiye authentication ke liye
+    # v2 me ye hamesha tha, bimbopro me galti se skip ho gaya tha
+    if os.path.exists("cookies.txt"):
+        common_ytdlp_args.extend(["--cookies", "cookies.txt"])
 
     # ============================================================
     #  xHamster (apna engine): JSON me xh_qualities hote hain ->
