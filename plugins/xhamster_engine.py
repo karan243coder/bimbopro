@@ -10,6 +10,7 @@ import re
 import json
 import html as html_lib
 import logging
+import time
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -510,12 +511,26 @@ def _extract_from_html(html: str, page_url: str):
         return None
 
     heights = []
-    try:
-        r = requests.get(master, headers=headers, timeout=20)
-        if r.status_code == 200:
-            heights = _heights_from_master(r.text)
-    except Exception as e:
-        logger.warning("xh master fetch fail: %s", e)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            r = requests.get(master, headers=headers, timeout=20)
+            if r.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + 1
+                    logger.warning(f"xhamster: master fetch rate limited, waiting {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+            if r.status_code == 200:
+                heights = _heights_from_master(r.text)
+                break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + 1
+                logger.warning(f"xhamster: master fetch error, retrying in {wait_time}s: {e}")
+                time.sleep(wait_time)
+                continue
+            logger.warning("xh master fetch fail: %s", e)
 
     if not heights:
         for m2 in re.finditer(r":(\d{3,4})p", master):
@@ -561,7 +576,13 @@ def extract(url: str, cookies_file: str = None):
 
     session = requests.Session()
 
-    def fetch_page(page_url):
+    # Rate limiting prevention: requests ke beech me delay
+    _last_request_time = 0
+    _min_delay = 1.5  # Minimum 1.5 seconds between requests
+
+    def fetch_page(page_url, max_retries=3):
+        nonlocal _last_request_time
+        
         page_url = _clean_xhamster_page_url(page_url)
         page_base = _base_of(page_url)
         h = dict(headers)
@@ -569,6 +590,40 @@ def extract(url: str, cookies_file: str = None):
         h["Origin"] = page_base
         if cookie_header:
             h["Cookie"] = cookie_header
+        
+        # Rate limiting prevention: delay between requests
+        current_time = time.time()
+        time_since_last = current_time - _last_request_time
+        if time_since_last < _min_delay:
+            delay = _min_delay - time_since_last
+            logger.debug(f"xhamster: waiting {delay:.1f}s before request (rate limit prevention)")
+            time.sleep(delay)
+        
+        for attempt in range(max_retries):
+            try:
+                response = session.get(page_url, headers=h, cookies=cookies, timeout=25, allow_redirects=True)
+                _last_request_time = time.time()  # Update last request time
+                
+                # Check for rate limit
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) + 1  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"xhamster: rate limited, waiting {wait_time}s (attempt {attempt+1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"xhamster: rate limited after {max_retries} attempts")
+                
+                return response
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    wait_time = (2 ** attempt) + 1
+                    logger.warning(f"xhamster: request error, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise
+        
         return session.get(page_url, headers=h, cookies=cookies, timeout=25, allow_redirects=True)
 
     tried = []
