@@ -10,8 +10,6 @@ import re
 import json
 import html as html_lib
 import logging
-import time
-import random
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -22,15 +20,6 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
-
-UA_LIST = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-]
 
 _XH_BRANDS = (
     "xhamster", "xhms", "xhday", "xhvid", "xhwide", "xhwebcam",
@@ -488,7 +477,7 @@ def _clean_title(title: str, page_url: str):
 
 def _extract_from_html(html: str, page_url: str):
     base = _base_of(page_url)
-    headers = {"User-Agent": random.choice(UA_LIST), "Referer": page_url, "Origin": base}
+    headers = {"User-Agent": UA, "Referer": page_url, "Origin": base}
 
     title = None
     duration = None
@@ -521,26 +510,12 @@ def _extract_from_html(html: str, page_url: str):
         return None
 
     heights = []
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            r = requests.get(master, headers=headers, timeout=20)
-            if r.status_code == 429:
-                if attempt < max_retries - 1:
-                    wait_time = (2 ** attempt) + 1
-                    logger.warning(f"xhamster: master fetch rate limited, waiting {wait_time}s")
-                    time.sleep(wait_time)
-                    continue
-            if r.status_code == 200:
-                heights = _heights_from_master(r.text)
-                break
-        except Exception as e:
-            if attempt < max_retries - 1:
-                wait_time = (2 ** attempt) + 1
-                logger.warning(f"xhamster: master fetch error, retrying in {wait_time}s: {e}")
-                time.sleep(wait_time)
-                continue
-            logger.warning("xh master fetch fail: %s", e)
+    try:
+        r = requests.get(master, headers=headers, timeout=20)
+        if r.status_code == 200:
+            heights = _heights_from_master(r.text)
+    except Exception as e:
+        logger.warning("xh master fetch fail: %s", e)
 
     if not heights:
         for m2 in re.finditer(r":(\d{3,4})p", master):
@@ -572,7 +547,7 @@ def extract(url: str, cookies_file: str = None):
     desktop = _clean_xhamster_page_url(_to_desktop(url))
     base = _base_of(desktop)
     headers = {
-        "User-Agent": random.choice(UA_LIST),
+        "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": desktop,
@@ -585,11 +560,8 @@ def extract(url: str, cookies_file: str = None):
         logger.info("xhamster: cookies loaded count=%s", len(cookies or {}))
 
     session = requests.Session()
-    if cookies:
-        session.cookies.update(cookies)
 
-    def fetch_page(page_url, max_retries=4):
-        """Direct connection with smart retry - no proxy overhead"""
+    def fetch_page(page_url):
         page_url = _clean_xhamster_page_url(page_url)
         page_base = _base_of(page_url)
         h = dict(headers)
@@ -597,51 +569,11 @@ def extract(url: str, cookies_file: str = None):
         h["Origin"] = page_base
         if cookie_header:
             h["Cookie"] = cookie_header
-
-        for attempt in range(max_retries):
-            try:
-                response = session.get(
-                    page_url, headers=h,
-                    timeout=20, allow_redirects=True
-                )
-
-                if response.status_code == 429:
-                    # Rate limited - exponential backoff with jitter
-                    wait = (2 ** attempt) + random.uniform(0.5, 2.0)
-                    logger.warning(f"xhamster: 429 rate limited, waiting {wait:.1f}s (attempt {attempt+1}/{max_retries})")
-                    time.sleep(wait)
-                    # Rotate User-Agent on retry
-                    h["User-Agent"] = random.choice(UA_LIST)
-                    continue
-
-                if response.status_code == 403:
-                    wait = (2 ** attempt) + random.uniform(1, 3)
-                    logger.warning(f"xhamster: 403 forbidden, waiting {wait:.1f}s (attempt {attempt+1}/{max_retries})")
-                    time.sleep(wait)
-                    h["User-Agent"] = random.choice(UA_LIST)
-                    continue
-
-                return response
-
-            except requests.exceptions.RequestException as e:
-                if attempt < max_retries - 1:
-                    wait = (2 ** attempt) + random.uniform(0.5, 1.5)
-                    logger.warning(f"xhamster: request error, retrying in {wait:.1f}s: {e}")
-                    time.sleep(wait)
-                    h["User-Agent"] = random.choice(UA_LIST)
-                    continue
-                else:
-                    logger.error(f"xhamster: all {max_retries} attempts failed: {e}")
-                    raise
-
-        return None
+        return session.get(page_url, headers=h, cookies=cookies, timeout=25, allow_redirects=True)
 
     tried = []
     try:
         r = fetch_page(desktop)
-        if r is None:
-            logger.warning("xh page fetch returned None")
-            return None
         html = r.text
         tried.append(desktop)
     except Exception as e:
