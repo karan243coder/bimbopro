@@ -50,6 +50,14 @@ async def gatekeeper(client: Client, m: Message):
     uid = m.from_user.id if m.from_user else None
     if not uid:
         return
+
+    # Check if the message is too old (updates flood protection on startup)
+    msg_age = time.time() - m.date.timestamp() if getattr(m, "date", None) else 0
+    if msg_age > 120:  # Older than 2 minutes
+        logger.info(f"Gatekeeper: Discarded old message (age: {msg_age:.1f}s) to prevent startup overload.")
+        m.stop_propagation()
+        return
+
     # Ban check
     if await db.is_banned(uid):
         try:
