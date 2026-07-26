@@ -587,13 +587,13 @@ async def echo(bot, update):
     if is_xhamster(url):
         # Sirf single video URLs pe hi apna engine chalao
         _p = urlparse(url).path.lower()
-        _is_single_video = ("/videos/" in _p) and not any(
-            k in _p for k in ("/creators/", "/users/", "/pornstars/", "/channels/",
-                              "/gallery", "/photos/", "/search", "/categories/",
+        _is_single_video = ("/videos/" in _p or "/creators/" in _p or "/users/" in _p or 
+                           "/pornstars/" in _p or "/channels/" in _p) and not any(
+            k in _p for k in ("/gallery", "/photos/", "/search", "/categories/",
                               "/tags/", "/models/")
         )
         if not _is_single_video:
-            # Non-video xhamster URL (creator/profile/gallery/search)
+            # Non-video xhamster URL (gallery/search)
             uid = update.from_user.id if update.from_user else 0
             try:
                 from utils import is_admin as _ia, is_premium as _ip
@@ -661,6 +661,7 @@ async def echo(bot, update):
                 )
             return False
 
+        # Try custom engine first
         try:
             cookies_path = "cookies.txt" if os.path.exists("cookies.txt") else None
             loop = asyncio.get_event_loop()
@@ -707,12 +708,8 @@ async def echo(bot, update):
             return
 
         # If the custom engine fails, we fall back to yt-dlp extraction!
-        logger.error("xhamster custom engine FAILED, falling back to yt-dlp extraction: %s", url)
-        try:
-            await imog.edit("<b>⚠️ Custom engine failed, trying yt-dlp fallback...</b>", parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            pass
-        # Let it fall through to the rest of the file!
+        logger.warning("xhamster custom engine FAILED (rate limited?), using yt-dlp: %s", url)
+        # Don't return - let it fall through to yt-dlp handler below!
 
 
     if is_eporner(url):
