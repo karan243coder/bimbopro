@@ -887,7 +887,7 @@ async def echo(bot, update):
     # Sxyprn Handler
     if is_sxyprn(url):
         try:
-            sxy_info = await sxyprn_extract(url)
+            sxy_info = await asyncio.to_thread(sxyprn_extract, url)
             if sxy_info and sxy_info.get("qualities"):
                 logger.info("sxyprn custom engine OK: %s", url)
                 sxy_json = {
@@ -922,7 +922,7 @@ async def echo(bot, update):
     if is_pornhub(url):
         try:
             loop = asyncio.get_event_loop()
-            ph_info = await pornhub_extract(url)
+            ph_info = await asyncio.to_thread(pornhub_extract, url)
             if ph_info and ph_info.get("qualities"):
                 logger.info("pornhub custom engine OK: %s", url)
                 ph_json = {
@@ -957,7 +957,7 @@ async def echo(bot, update):
     if is_xvideos(url):
         try:
             loop = asyncio.get_event_loop()
-            xv_info = await xvideos_extract(url)
+            xv_info = await asyncio.to_thread(xvideos_extract, url)
             if xv_info and xv_info.get("qualities"):
                 logger.info("xvideos custom engine OK: %s", url)
                 xv_json = {
@@ -992,7 +992,7 @@ async def echo(bot, update):
     if is_redtube(url):
         try:
             loop = asyncio.get_event_loop()
-            rt_info = await redtube_extract(url)
+            rt_info = await asyncio.to_thread(redtube_extract, url)
             if rt_info and rt_info.get("qualities"):
                 logger.info("redtube custom engine OK: %s", url)
                 rt_json = {
@@ -1027,7 +1027,7 @@ async def echo(bot, update):
     if is_youporn(url):
         try:
             loop = asyncio.get_event_loop()
-            yp_info = await youporn_extract(url)
+            yp_info = await asyncio.to_thread(youporn_extract, url)
             if yp_info and yp_info.get("qualities"):
                 logger.info("youporn custom engine OK: %s", url)
                 yp_json = {
@@ -1062,7 +1062,7 @@ async def echo(bot, update):
     if is_tube8(url):
         try:
             loop = asyncio.get_event_loop()
-            t8_info = await tube8_extract(url)
+            t8_info = await asyncio.to_thread(tube8_extract, url)
             if t8_info and t8_info.get("qualities"):
                 logger.info("tube8 custom engine OK: %s", url)
                 t8_json = {
@@ -1097,7 +1097,7 @@ async def echo(bot, update):
     if is_spankbang(url):
         try:
             loop = asyncio.get_event_loop()
-            sb_info = await spankbang_extract(url)
+            sb_info = await asyncio.to_thread(spankbang_extract, url)
             if sb_info and sb_info.get("qualities"):
                 logger.info("spankbang custom engine OK: %s", url)
                 sb_json = {
@@ -1132,7 +1132,7 @@ async def echo(bot, update):
     if is_wowxxx(url):
         try:
             loop = asyncio.get_event_loop()
-            wx_info = await wowxxx_extract(url)
+            wx_info = await asyncio.to_thread(wowxxx_extract, url)
             if wx_info and wx_info.get("qualities"):
                 logger.info("wowxxx custom engine OK: %s", url)
                 wx_json = {
@@ -1167,7 +1167,7 @@ async def echo(bot, update):
     if is_xhand(url):
         try:
             loop = asyncio.get_event_loop()
-            xh_info = await xhand_extract(url)
+            xh_info = await asyncio.to_thread(xhand_extract, url)
             if xh_info and xh_info.get("qualities"):
                 logger.info("xhand custom engine OK: %s", url)
                 xh_json = {
@@ -1202,7 +1202,7 @@ async def echo(bot, update):
     if is_bang(url):
         try:
             loop = asyncio.get_event_loop()
-            bg_info = await bang_extract(url)
+            bg_info = await asyncio.to_thread(bang_extract, url)
             if bg_info and bg_info.get("qualities"):
                 logger.info("bang custom engine OK: %s", url)
                 bg_json = {

@@ -46,7 +46,7 @@ def _extract_post_id(url: str) -> Optional[str]:
     return None
 
 
-async def extract_video_info(url: str) -> Optional[Dict]:
+def extract_video_info(url: str) -> Optional[Dict]:
     try:
         url = _clean_url(url)
         post_id = _extract_post_id(url)

@@ -1,6 +1,5 @@
 # BIMBO URL Bot
-# Powered by BIMBO
-# Support: @Bimbo69
+# Powered by BIMBO | Support: @Bimbo69
 
 import logging
 import time
@@ -35,27 +34,85 @@ async def button(bot, update):
     try:
         cb_data = update.data or ""
         logger.info(f"Callback (core): {cb_data[:80]}")
+        
+        user_id = update.from_user.id if update.from_user else 0
 
         if cb_data.startswith("terabox="):
             logger.info("Routing to terabox_call_back")
-            await terabox_call_back(bot, update)
+            try:
+                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+            except Exception:
+                pass
+            
+            from utils import GLOBAL_DOWNLOAD_SEM
+            from plugins.preemption_manager import pause_bulk_jobs, resume_bulk_jobs
+            
+            async with GLOBAL_DOWNLOAD_SEM:
+                paused_jobs = await pause_bulk_jobs(user_id)
+                try:
+                    await terabox_call_back(bot, update)
+                finally:
+                    if paused_jobs:
+                        await resume_bulk_jobs(user_id, bot)
 
         elif "|" in cb_data:
             logger.info("Routing to youtube_dl_call_back")
-            await youtube_dl_call_back(bot, update)
+            try:
+                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+            except Exception:
+                pass
+            
+            from utils import GLOBAL_DOWNLOAD_SEM
+            from plugins.preemption_manager import pause_bulk_jobs, resume_bulk_jobs
+            
+            async with GLOBAL_DOWNLOAD_SEM:
+                paused_jobs = await pause_bulk_jobs(user_id)
+                try:
+                    await youtube_dl_call_back(bot, update)
+                finally:
+                    if paused_jobs:
+                        await resume_bulk_jobs(user_id, bot)
 
         elif cb_data.startswith(("file=DIRECT=", "video=DIRECT=", "audio=DIRECT=")):
             # Route direct links through yt-dlp engine (headers, aria2, resume)
             tg_type, _, ext = cb_data.split("=", 2)
             update.data = f"{tg_type}|AUTO|{ext}|direct_{int(time.time())}"
             logger.info(f"Routing DIRECT link via yt-dlp ({tg_type})")
-            await youtube_dl_call_back(bot, update)
+            try:
+                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+            except Exception:
+                pass
+            
+            from utils import GLOBAL_DOWNLOAD_SEM
+            from plugins.preemption_manager import pause_bulk_jobs, resume_bulk_jobs
+            
+            async with GLOBAL_DOWNLOAD_SEM:
+                paused_jobs = await pause_bulk_jobs(user_id)
+                try:
+                    await youtube_dl_call_back(bot, update)
+                finally:
+                    if paused_jobs:
+                        await resume_bulk_jobs(user_id, bot)
 
         elif cb_data.startswith(("file=", "video=", "audio=")) and not cb_data.startswith((
             "file=DIRECT=", "video=DIRECT=", "audio=DIRECT="
         )):
             logger.info("Routing to ddl_call_back")
-            await ddl_call_back(bot, update)
+            try:
+                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+            except Exception:
+                pass
+            
+            from utils import GLOBAL_DOWNLOAD_SEM
+            from plugins.preemption_manager import pause_bulk_jobs, resume_bulk_jobs
+            
+            async with GLOBAL_DOWNLOAD_SEM:
+                paused_jobs = await pause_bulk_jobs(user_id)
+                try:
+                    await ddl_call_back(bot, update)
+                finally:
+                    if paused_jobs:
+                        await resume_bulk_jobs(user_id, bot)
 
         elif "refreshForceSub" in cb_data:
             if Config.BIMBO_UPDATES_CHANNEL:

@@ -173,6 +173,9 @@ async def short_download(client: Client, message: Message):
     if wait > 0:
         return await message.reply_text(Translation.RATE_LIMIT_MSG.format(wait))
 
+    from plugins.preemption_manager import pause_bulk_jobs, resume_bulk_jobs
+    paused_jobs = await pause_bulk_jobs(uid)
+
     text = (message.text or "").split(None, 1)
     cmd = text[0].lstrip("/").lower()
     url = text[1] if len(text) > 1 else ""
@@ -239,3 +242,5 @@ async def short_download(client: Client, message: Message):
         await msg.edit_text(f"❌ **Error:** <code>{e}</code>")
     finally:
         asyncio.create_task(cleanup_dir(out_dir))
+        if paused_jobs:
+            await resume_bulk_jobs(uid, client)

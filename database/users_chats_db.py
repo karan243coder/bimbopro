@@ -1,6 +1,7 @@
 # BIMBO v4.0 - Unified MongoDB for users + bans + settings + premium
 import time
 import logging
+import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import Config
 
@@ -26,10 +27,28 @@ class Database:
             self.settings = self.db["settings"]
             self.stats = self.db["stats"]
             self._use_fb = False
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.create_indexes())
+            except RuntimeError:
+                pass
         except Exception as e:
             logger.error(f"DB init error: {e}")
             self._use_fb = True
             self._fallback = {"users": {}, "bans": set(), "premium": {}, "thumbs": {}, "settings": {}}
+
+    async def create_indexes(self):
+        if self._use_fb:
+            return
+        try:
+            await self.users.create_index("id", unique=True)
+            await self.bans.create_index("id", unique=True)
+            await self.premium.create_index("id", unique=True)
+            await self.thumbs.create_index("id", unique=True)
+            await self.settings.create_index("id", unique=True)
+            logger.info("✅ Database indexes created successfully.")
+        except Exception as e:
+            logger.warning(f"Failed to create database indexes: {e}")
 
     async def add_user(self, user_id, name="", username=""):
         try:

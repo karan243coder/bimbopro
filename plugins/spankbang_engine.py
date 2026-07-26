@@ -90,7 +90,7 @@ def _parse_quality_label(label: str) -> int:
     return 720  # Default
 
 
-async def extract_video_info(url: str) -> Optional[Dict]:
+def extract_video_info(url: str) -> Optional[Dict]:
     """
     Extract video information from SpankBang
     

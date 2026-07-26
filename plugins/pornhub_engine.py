@@ -55,7 +55,7 @@ def _extract_video_id(url: str) -> Optional[str]:
     return None
 
 
-async def extract_video_info(url: str) -> Optional[Dict]:
+def extract_video_info(url: str) -> Optional[Dict]:
     """Extract video information from Pornhub"""
     try:
         url = _clean_url(url)
