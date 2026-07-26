@@ -570,6 +570,39 @@ async def progress_for_pyrogram(current, total, ud_type, message, start,
     percentage = (current * 100) / total
     percentage = min(max(percentage, 0), 100)
     
+    # 1. Update central unified advanced progress card
+    try:
+        task_id = f"pyro_{msg_id}"
+        task = get_task(task_id)
+        if not task:
+            register_task(
+                task_id=task_id,
+                user_id=chat_id,
+                filename=file_name or ud_type or "File",
+                total_size=total,
+                task_type='upload' if not is_download else 'download',
+                engine='pyrogram'
+            )
+            set_user_message(chat_id, message)
+        
+        update_task(
+            task_id=task_id,
+            downloaded=current,
+            total_size=total,
+            speed=avg_speed,
+            status='uploading' if not is_download else 'downloading'
+        )
+        await update_user_progress(None, chat_id)
+        
+        # Cleanup when complete
+        if current == total:
+            remove_task(task_id)
+            cleanup_progress_state(msg_id)
+        last_edit_time[msg_id] = now
+        return
+    except Exception as e:
+        logger.error(f"Unified pyro progress error: {e}")
+
     # Build individual progress card
     task_type = "UPLOAD" if not is_download else "DOWNLOAD"
     status_emoji = "📤" if not is_download else "📥"
