@@ -706,19 +706,13 @@ async def echo(bot, update):
             )
             return
 
-        # IMPORTANT: xHamster ke liye yt-dlp -j bilkul mat chalao.
-        # Agar apna engine fail hua, user ko clear message do, warna yt-dlp ka
-        # purana KeyError('videoModel') confusing error aa jaata hai.
-        logger.error("xhamster custom engine FAILED, not using yt-dlp info fallback: %s", url)
-        await imog.edit(
-            "<b>❌ xHamster custom engine link parse nahi kar paya.</b>\n\n"
-            "Bot ko yt-dlp wale old error se bachane ke liye maine yahan stop kar diya hai.\n"
-            "Please Koyeb logs me <code>xhamster:</code> wali 5-10 lines bhejo, main exact patch kar dunga.\n\n"
-            "Tip: same link ko browser me open karke copy fresh link bhejo.",
-            parse_mode=enums.ParseMode.HTML,
-            disable_web_page_preview=True,
-        )
-        return False
+        # If the custom engine fails, we fall back to yt-dlp extraction!
+        logger.error("xhamster custom engine FAILED, falling back to yt-dlp extraction: %s", url)
+        try:
+            await imog.edit("<b>⚠️ Custom engine failed, trying yt-dlp fallback...</b>", parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            pass
+        # Let it fall through to the rest of the file!
 
 
     if is_eporner(url):
@@ -1417,4 +1411,3 @@ async def echo(bot, update):
             parse_mode=enums.ParseMode.HTML,
             reply_to_message_id=update.id,
         )
-
