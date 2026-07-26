@@ -1086,17 +1086,32 @@ async def youtube_dl_call_back(bot, update):
                         downloaded_bytes = int((percentage / 100) * total_bytes)
                         downloaded_text = humanbytes(downloaded_bytes)
                     
-                    # Always show individual progress card
-                    progress_text = build_download_card(
-                        display_name=display_name,
-                        percentage=percentage,
-                        speed_text=speed,
-                        total_size_text=total_size,
-                        eta_text=eta,
-                        elapsed_text=elapsed_str,
-                        downloaded_text=downloaded_text,
-                    )
-                    await safe_edit(progress_msg, progress_text)
+                    # Update central unified advanced progress card
+                    try:
+                        speed_bytes = size_text_to_bytes(speed.replace("/s", "").strip())
+                        update_task(
+                            task_id=progress_task_id,
+                            downloaded=downloaded_bytes,
+                            total_size=total_bytes,
+                            speed=speed_bytes,
+                            status='downloading',
+                            engine='yt-dlp'
+                        )
+                        set_user_message(update.from_user.id, progress_msg)
+                        await update_user_progress(bot, update.from_user.id)
+                    except Exception as e:
+                        logger.error(f"Unified progress error: {e}")
+                        # Fallback to individual progress card
+                        progress_text = build_download_card(
+                            display_name=display_name,
+                            percentage=percentage,
+                            speed_text=speed,
+                            total_size_text=total_size,
+                            eta_text=eta,
+                            elapsed_text=elapsed_str,
+                            downloaded_text=downloaded_text,
+                        )
+                        await safe_edit(progress_msg, progress_text)
                     
                     last_progress_update = now
             except Exception as e:
@@ -1727,7 +1742,7 @@ async def youtube_dl_call_back(bot, update):
             f"┃ 📦 Progress: {humanbytes(file_size)} / {humanbytes(file_size)}\n"
             f"┃ ⏳ ETA: 0s\n"
             f"┃ 🕒 Elapsed: {time_str}\n"
-            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
+            f"╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯"
         )
         
         success_msg = await bot.send_message(
