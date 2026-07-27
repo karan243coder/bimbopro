@@ -4,22 +4,52 @@
 #  - yt-dlp info extractor bypass
 #  - Finds plaintext/escaped/encrypted HLS
 #  - Builds h264 HLS quality URLs
+#  - 429 rate-limit fix with retry + UA rotation
 # ============================================================
 
 import re
 import json
 import html as html_lib
 import logging
+import random
+import time
 from urllib.parse import urlparse, unquote
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
+# ============================================================
+# 429 FIX: Multiple User-Agents for rotation
+# xhamster ek hi UA ko jaldi detect/ban kar deta hai
+# ============================================================
+_UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:127.0) Gecko/20100101 Firefox/127.0",
+]
+
+# Default UA (backward compat for other functions)
+UA = _UA_POOL[0]
+
+# ============================================================
+# 429 FIX: Retry config
+# ============================================================
+MAX_RETRIES = 4            # 429 pe max 4 baar retry
+BASE_DELAY = 3             # pehla retry 3 sec baad
+MAX_DELAY = 30             # max wait 30 sec
+REQUEST_TIMEOUT = 30       # request timeout
+
+def _random_ua():
+    """Har request pe alag User-Agent do"""
+    return random.choice(_UA_POOL)
 
 _XH_BRANDS = (
     "xhamster", "xhms", "xhday", "xhvid", "xhwide", "xhwebcam",
@@ -477,7 +507,8 @@ def _clean_title(title: str, page_url: str):
 
 def _extract_from_html(html: str, page_url: str):
     base = _base_of(page_url)
-    headers = {"User-Agent": UA, "Referer": page_url, "Origin": base}
+    ua = _random_ua()
+    headers = {"User-Agent": ua, "Referer": page_url, "Origin": base}
 
     title = None
     duration = None
@@ -511,9 +542,20 @@ def _extract_from_html(html: str, page_url: str):
 
     heights = []
     try:
-        r = requests.get(master, headers=headers, timeout=20)
-        if r.status_code == 200:
-            heights = _heights_from_master(r.text)
+        # 429 FIX: master m3u8 fetch bhi retry ke saath
+        mh = {"User-Agent": _random_ua(), "Referer": page_url, "Origin": base}
+        for _attempt in range(3):
+            r = requests.get(master, headers=mh, timeout=REQUEST_TIMEOUT)
+            if r.status_code == 200:
+                heights = _heights_from_master(r.text)
+                break
+            elif r.status_code == 429:
+                wait = BASE_DELAY * (2 ** _attempt) + random.uniform(0.5, 2)
+                logger.warning("xh master 429, retry %d after %.1fs", _attempt + 1, wait)
+                time.sleep(wait)
+                mh["User-Agent"] = _random_ua()
+            else:
+                break
     except Exception as e:
         logger.warning("xh master fetch fail: %s", e)
 
@@ -539,41 +581,136 @@ def _extract_from_html(html: str, page_url: str):
         "base": base,
         "master_m3u8": master,
         "qualities": qualities,
-        "headers": {"User-Agent": UA, "Referer": page_url, "Origin": base},
+        "headers": {"User-Agent": ua, "Referer": page_url, "Origin": base},
     }
 
 
 def extract(url: str, cookies_file: str = None):
     desktop = _clean_xhamster_page_url(_to_desktop(url))
     base = _base_of(desktop)
-    headers = {
-        "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": desktop,
-        "Origin": base,
-    }
 
     cookies, cookie_header = _load_netscape_cookies(cookies_file)
     if cookie_header:
-        headers["Cookie"] = cookie_header
         logger.info("xhamster: cookies loaded count=%s", len(cookies or {}))
 
     session = requests.Session()
 
-    def fetch_page(page_url):
+    # ============================================================
+    # 429 FIX: fetch_page with retry + UA rotation + backoff
+    # ============================================================
+    def fetch_page(page_url, is_retry_url=False):
+        """Fetch a page with automatic 429 retry and UA rotation."""
         page_url = _clean_xhamster_page_url(page_url)
         page_base = _base_of(page_url)
-        h = dict(headers)
-        h["Referer"] = page_url
-        h["Origin"] = page_base
-        if cookie_header:
-            h["Cookie"] = cookie_header
-        return session.get(page_url, headers=h, cookies=cookies, timeout=25, allow_redirects=True)
+
+        max_attempts = MAX_RETRIES if not is_retry_url else 2
+
+        for attempt in range(max_attempts):
+            # Har attempt pe naya User-Agent
+            ua = _random_ua()
+            h = {
+                "User-Agent": ua,
+                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Referer": page_url,
+                "Origin": page_base,
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+                "Sec-Fetch-User": "?1",
+            }
+            if cookie_header:
+                h["Cookie"] = cookie_header
+
+            # Pehle attempt pe chhota random delay (bot-like behavior avoid)
+            if attempt == 0:
+                time.sleep(random.uniform(0.5, 2.0))
+            else:
+                # Exponential backoff with jitter
+                delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+                delay += random.uniform(0.5, 3.0)
+                logger.info("xhamster: 429 retry attempt=%d/%d delay=%.1fs url=%s",
+                           attempt + 1, max_attempts, delay, page_url[:80])
+                time.sleep(delay)
+
+            try:
+                r = session.get(
+                    page_url, headers=h, cookies=cookies,
+                    timeout=REQUEST_TIMEOUT, allow_redirects=True
+                )
+            except requests.exceptions.Timeout:
+                logger.warning("xhamster: timeout on attempt %d url=%s", attempt + 1, page_url[:80])
+                continue
+            except requests.exceptions.ConnectionError as ce:
+                logger.warning("xhamster: connection error attempt %d: %s", attempt + 1, str(ce)[:100])
+                if attempt < max_attempts - 1:
+                    time.sleep(5)
+                    continue
+                return None
+            except Exception as e:
+                logger.warning("xh page fetch fail: %s", e)
+                return None
+
+            # ============================================================
+            # 429 HANDLING
+            # ============================================================
+            if r.status_code == 429:
+                # Retry-After header respect karo agar hai
+                retry_after = r.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait = int(retry_after)
+                        logger.info("xhamster: Retry-After header says wait %ds", wait)
+                    except ValueError:
+                        wait = BASE_DELAY * (2 ** (attempt + 1))
+                else:
+                    wait = BASE_DELAY * (2 ** (attempt + 1)) + random.uniform(1, 4)
+
+                if attempt < max_attempts - 1:
+                    logger.warning(
+                        "xhamster: 429 TOO MANY REQUESTS (attempt %d/%d), waiting %.1fs before retry",
+                        attempt + 1, max_attempts, wait
+                    )
+                    time.sleep(min(wait, MAX_DELAY))
+                    # Session reset - naye connection se try karo
+                    session.close()
+                    session = requests.Session()
+                    continue
+                else:
+                    logger.error("xhamster: 429 persists after %d attempts, giving up", max_attempts)
+                    return r  # return the 429 response so caller can check
+
+            # 403 bhi rate limit ho sakta hai (Cloudflare etc.)
+            if r.status_code == 403:
+                if attempt < max_attempts - 1:
+                    wait = BASE_DELAY * (2 ** (attempt + 1)) + random.uniform(2, 5)
+                    logger.warning("xhamster: 403 (possible rate limit), retry after %.1fs", wait)
+                    time.sleep(min(wait, MAX_DELAY))
+                    session.close()
+                    session = requests.Session()
+                    continue
+                else:
+                    logger.error("xhamster: 403 persists after %d attempts", max_attempts)
+                    return r
+
+            # Success ya koi aur error - return as is
+            return r
+
+        return None
 
     tried = []
     try:
         r = fetch_page(desktop)
+        if r is None:
+            logger.warning("xh page fetch returned None")
+            return None
+        # Check if final attempt was 429/403
+        if hasattr(r, 'status_code') and r.status_code in (429, 403):
+            logger.error("xhamster: RATE LIMITED (status=%s) for url=%s", r.status_code, desktop[:80])
+            return None
         html = r.text
         tried.append(desktop)
     except Exception as e:
@@ -597,11 +734,14 @@ def extract(url: str, cookies_file: str = None):
             if cand in tried:
                 continue
             try:
-                rr = fetch_page(cand)
+                rr = fetch_page(cand, is_retry_url=True)
+                if rr is None or (hasattr(rr, 'status_code') and rr.status_code in (429, 403)):
+                    logger.warning("xhamster: retry skip (rate limited) url=%s", cand[:80])
+                    continue
                 hh = rr.text
                 tried.append(cand)
                 ok, _ = _has_player_data(hh)
-                logger.info("xhamster: retry url=%s status=%s html_len=%s player=%s", cand, getattr(rr, "status_code", None), len(hh or ""), ok)
+                logger.info("xhamster: retry url=%s status=%s html_len=%s player=%s", cand[:80], getattr(rr, "status_code", None), len(hh or ""), ok)
                 if ok:
                     r, html, desktop = rr, hh, cand
                     break
