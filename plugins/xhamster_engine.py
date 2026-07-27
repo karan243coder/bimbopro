@@ -664,6 +664,33 @@ def _extract_from_html(html, page_url, cookie_header=None):
     }
 
 
+def _filter_xhamster_cookies(cookie_header):
+    """Sirf xhamster-related cookies rakho, baaki hatao."""
+    if not cookie_header:
+        return None
+    parts = cookie_header.split("; ")
+    # Important xhamster cookies
+    important = ["_id", "_cfg", "settings", "cookie_accept", "parental-control",
+                 "UID", "x_csrf_token", "x_tgt", "x_viewes", "x_content_preference",
+                 "h_v4_straight", "stats_src_last", "ff_thumb_offset", "recs_show_time",
+                 "last_video_search", "search_last_list", "moments_listing",
+                 "x_preroll", "_ga"]
+    filtered = []
+    for part in parts:
+        if "=" not in part:
+            continue
+        name = part.split("=", 1)[0].strip()
+        if any(imp in name.lower() for imp in important):
+            filtered.append(part)
+        # Skip tracking/ad cookies
+        elif any(skip in name.lower() for skip in ["_ga", "gads", "gpi", "cto_", "__g", "IDE", "TDID"]):
+            continue
+    result = "; ".join(filtered) if filtered else None
+    if result:
+        logger.info("xhamster: filtered cookies: %d (from %d total)", len(filtered), len(parts))
+    return result
+
+
 def _fetch_via_cf_worker(url, cookie_header=None):
     """Cloudflare Worker proxy se page fetch karo. FASTEST option!"""
     if not CF_WORKER_URL:
@@ -671,44 +698,72 @@ def _fetch_via_cf_worker(url, cookie_header=None):
 
     worker_url = f"{CF_WORKER_URL}?url={quote(url, safe='')}"
 
-    # Try 1: WITHOUT cookies first (cookies kabhi kabhi error dete hain)
-    for attempt, use_cookies in enumerate([False, True]):
+    # Filter cookies - sirf xhamster wale bhejo
+    filtered_cookies = _filter_xhamster_cookies(cookie_header)
+
+    # Try WITH cookies FIRST (xhamster requires login for player data)
+    # Then without cookies as fallback
+    attempts = [True, False] if filtered_cookies else [False]
+
+    for use_cookies in attempts:
         try:
             h = {"User-Agent": _random_ua()}
-            if use_cookies and cookie_header:
-                h["X-Forward-Cookies"] = cookie_header
+            if use_cookies and filtered_cookies:
+                h["X-Forward-Cookies"] = filtered_cookies
 
             r = requests.get(worker_url, headers=h, timeout=WEB_PROXY_TIMEOUT, allow_redirects=True)
 
             if r.status_code == 200 and len(r.text) > 500:
                 html_text = r.text
-                if "window.initials" in html_text or "videoModel" in html_text:
-                    logger.info("xhamster: CF WORKER SUCCESS (cookies=%s, html_len=%d)",
+
+                # Check if xplayerSettings has actual data (not None)
+                has_real_player = False
+                if "xplayerSettings" in html_text:
+                    # Check it's not "xplayerSettings": null
+                    xps_match = re.search(r'"xplayerSettings"\s*:\s*(\{|\")', html_text)
+                    if xps_match:
+                        has_real_player = True
+
+                if has_real_player:
+                    logger.info("xhamster: CF WORKER SUCCESS with player data (cookies=%s, html_len=%d)",
                               use_cookies, len(html_text))
                     return html_text
-                elif "xhamster" in html_text.lower():
-                    logger.info("xhamster: CF worker got xhamster page but no player data (cookies=%s)", use_cookies)
-                    if not use_cookies:
+
+                # Check if page requires login
+                if "verify your age" in html_text or "must be logged in" in html_text:
+                    if use_cookies:
+                        logger.warning("xhamster: page requires login even with cookies")
+                    else:
+                        logger.info("xhamster: page requires login, will try with cookies")
                         continue  # Try with cookies
-                    return html_text  # Return anyway
-                else:
-                    logger.warning("xhamster: CF worker returned non-xhamster content")
+
+                # Has window.initials but no player - might still have m3u8
+                if "window.initials" in html_text:
+                    m3u8_check = re.findall(r'https?://[^\s\"<>]+\.m3u8', html_text)
+                    if m3u8_check:
+                        logger.info("xhamster: CF WORKER found m3u8 directly (cookies=%s)", use_cookies)
+                        return html_text
+
+                    # No player, no m3u8 - try with cookies if we haven't yet
+                    if not use_cookies and filtered_cookies:
+                        logger.info("xhamster: no player data without cookies, retrying with cookies")
+                        continue
+
+                # Return whatever we got
+                if "xhamster" in html_text.lower():
+                    logger.info("xhamster: CF worker returned xhamster page (cookies=%s, player=%s, html_len=%d)",
+                              use_cookies, has_real_player, len(html_text))
+                    return html_text
+
             elif r.status_code in (520, 521, 522, 523, 524):
-                # Cloudflare origin errors - xhamster might be blocking this request
-                logger.warning("xhamster: CF worker got origin error %d (cookies=%s)", r.status_code, use_cookies)
-                if not use_cookies:
-                    continue  # Try with cookies
-            elif r.status_code == 403:
-                logger.warning("xhamster: CF worker got 403 (cookies=%s)", use_cookies)
-                if not use_cookies:
-                    continue
+                logger.warning("xhamster: CF worker origin error %d (cookies=%s)", r.status_code, use_cookies)
+                continue
             elif r.status_code == 400:
                 logger.warning("xhamster: CF worker got 400 (bad URL)")
-                return None  # Don't retry with cookies
+                return None
             else:
                 logger.warning("xhamster: CF worker status=%d len=%d", r.status_code, len(r.text))
-                if not use_cookies:
-                    continue
+                continue
         except Exception as e:
             logger.warning("xhamster: CF worker error: %s", str(e)[:80])
             return None
