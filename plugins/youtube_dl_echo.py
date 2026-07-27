@@ -707,9 +707,24 @@ async def echo(bot, update):
             )
             return
 
-        # If the custom engine fails, we fall back to yt-dlp extraction!
-        logger.warning("xhamster custom engine FAILED (rate limited?), using yt-dlp: %s", url)
-        # Don't return - let it fall through to yt-dlp handler below!
+        # 429 FIX: Custom engine fail hone pe yt-dlp pe MAT giro!
+        # yt-dlp bhi same IP se 429 khaayega - useless fallback hai.
+        # Proper error message dikhao aur ruko.
+        logger.warning("xhamster custom engine FAILED (rate limited/blocked): %s", url)
+        await imog.edit(
+            "<b>❌ xHamster link process nahi ho paya.</b>\n\n"
+            "Possible reasons:\n"
+            "• Server ne temporary rate limit lagaya hai (429)\n"
+            "• Video deleted ya private hai\n"
+            "• Region block hai\n\n"
+            "<b>Try karo:</b>\n"
+            "• 1-2 minute baad dobara bhejo\n"
+            "• Koi doosra xHamster link try karo\n"
+            "• Link browser me khol ke check karo ki chal raha hai ya nahi",
+            parse_mode=enums.ParseMode.HTML,
+            disable_web_page_preview=True,
+        )
+        return False
 
 
     if is_eporner(url):
