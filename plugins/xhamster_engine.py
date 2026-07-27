@@ -670,24 +670,48 @@ def _fetch_via_cf_worker(url, cookie_header=None):
         return None
 
     worker_url = f"{CF_WORKER_URL}?url={quote(url, safe='')}"
-    try:
-        h = {"User-Agent": _random_ua()}
-        if cookie_header:
-            h["X-Forward-Cookies"] = cookie_header
 
-        r = requests.get(worker_url, headers=h, timeout=WEB_PROXY_TIMEOUT, allow_redirects=True)
+    # Try 1: WITHOUT cookies first (cookies kabhi kabhi error dete hain)
+    for attempt, use_cookies in enumerate([False, True]):
+        try:
+            h = {"User-Agent": _random_ua()}
+            if use_cookies and cookie_header:
+                h["X-Forward-Cookies"] = cookie_header
 
-        if r.status_code == 200 and len(r.text) > 500:
-            html_text = r.text
-            if "window.initials" in html_text or "xhamster" in html_text.lower():
-                logger.info("xhamster: CF WORKER SUCCESS (html_len=%d)", len(html_text))
-                return html_text
+            r = requests.get(worker_url, headers=h, timeout=WEB_PROXY_TIMEOUT, allow_redirects=True)
+
+            if r.status_code == 200 and len(r.text) > 500:
+                html_text = r.text
+                if "window.initials" in html_text or "videoModel" in html_text:
+                    logger.info("xhamster: CF WORKER SUCCESS (cookies=%s, html_len=%d)",
+                              use_cookies, len(html_text))
+                    return html_text
+                elif "xhamster" in html_text.lower():
+                    logger.info("xhamster: CF worker got xhamster page but no player data (cookies=%s)", use_cookies)
+                    if not use_cookies:
+                        continue  # Try with cookies
+                    return html_text  # Return anyway
+                else:
+                    logger.warning("xhamster: CF worker returned non-xhamster content")
+            elif r.status_code in (520, 521, 522, 523, 524):
+                # Cloudflare origin errors - xhamster might be blocking this request
+                logger.warning("xhamster: CF worker got origin error %d (cookies=%s)", r.status_code, use_cookies)
+                if not use_cookies:
+                    continue  # Try with cookies
+            elif r.status_code == 403:
+                logger.warning("xhamster: CF worker got 403 (cookies=%s)", use_cookies)
+                if not use_cookies:
+                    continue
+            elif r.status_code == 400:
+                logger.warning("xhamster: CF worker got 400 (bad URL)")
+                return None  # Don't retry with cookies
             else:
-                logger.warning("xhamster: CF worker returned non-xhamster content")
-        else:
-            logger.warning("xhamster: CF worker status=%d len=%d", r.status_code, len(r.text))
-    except Exception as e:
-        logger.warning("xhamster: CF worker error: %s", str(e)[:80])
+                logger.warning("xhamster: CF worker status=%d len=%d", r.status_code, len(r.text))
+                if not use_cookies:
+                    continue
+        except Exception as e:
+            logger.warning("xhamster: CF worker error: %s", str(e)[:80])
+            return None
 
     return None
 
