@@ -71,6 +71,16 @@ ENGINE_COLORS = {
 def register_task(task_id, user_id, filename="Unknown", total_size=0, 
                   task_type="download", engine="pyrogram", source_url=""):
     """Naya task register karo tracker mein"""
+    # DUPLICATE CHECK: Same user ka same filename wala task already active hai to skip karo
+    existing_tasks = get_user_active_tasks(user_id)
+    for existing in existing_tasks:
+        # Same filename + same task_type = duplicate
+        if (existing.get('filename') == filename and 
+            existing.get('task_type') == task_type and
+            existing.get('id') != task_id):
+            logger.info(f"Duplicate task skipped: {filename} (type={task_type}) already active for user {user_id}")
+            return existing
+    
     task = {
         'id': task_id,
         'user_id': user_id,
@@ -160,10 +170,25 @@ def remove_task(task_id):
 def get_user_active_tasks(user_id):
     """Ek user ke saare active tasks lao"""
     active = []
+    stale_ids = []
+    now = time.time()
     for tid in _user_tasks.get(user_id, []):
         t = _task_store.get(tid)
-        if t and not t.get('completed'):
+        if not t:
+            continue
+        # Stale cleanup: queued task jo 5 min se zyada se queued hai aur 0 progress hai = ghost task
+        if (t.get('status') == 'queued' and 
+            t.get('percentage', 0) == 0 and 
+            t.get('downloaded', 0) == 0 and
+            (now - t.get('start_time', now)) > 300):  # 5 minutes
+            stale_ids.append(tid)
+            continue
+        if not t.get('completed'):
             active.append(t)
+    # Remove stale tasks
+    for tid in stale_ids:
+        logger.info(f"Removing stale queued task: {tid}")
+        remove_task(tid)
     return active
 
 
@@ -575,14 +600,27 @@ async def progress_for_pyrogram(current, total, ud_type, message, start,
         task_id = f"pyro_{msg_id}"
         task = get_task(task_id)
         if not task:
-            register_task(
-                task_id=task_id,
-                user_id=chat_id,
-                filename=file_name or ud_type or "File",
-                total_size=total,
-                task_type='upload' if not is_download else 'download',
-                engine='pyrogram'
-            )
+            # Check if there's ALREADY an upload task for this user (from youtube_dl_button)
+            # This prevents double registration of the same upload
+            existing_active = get_user_active_tasks(chat_id)
+            existing_upload = None
+            for et in existing_active:
+                if et.get('task_type') == 'upload' and not et.get('completed'):
+                    existing_upload = et
+                    break
+            
+            if existing_upload:
+                # Use existing upload task instead of creating new one
+                task_id = existing_upload['id']
+            else:
+                register_task(
+                    task_id=task_id,
+                    user_id=chat_id,
+                    filename=file_name or ud_type or "File",
+                    total_size=total,
+                    task_type='upload' if not is_download else 'download',
+                    engine='pyrogram'
+                )
             set_user_message(chat_id, message)
         
         update_task(
