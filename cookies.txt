@@ -1,7 +1,27 @@
 # Netscape HTTP Cookie File
 # https://curl.haxx.se/rfc/cookie_spec.html
 # This is a generated file! Do not edit.
-
+.xhamster19.com	TRUE	/	TRUE	1785214900	stats_src_last	xhamster19.com
+.xhamster19.com	TRUE	/	FALSE	1816664479	cookie_accept_v2	%7B%22e%22%3A1%2C%22f%22%3A1%2C%22t%22%3A1%2C%22a%22%3A1%7D
+.xhamster19.com	TRUE	/	FALSE	1816664493	ff_thumb_offset	2
+.xhamster19.com	TRUE	/	FALSE	1785129393	recs_show_time	1785128491
+.xhamster19.com	TRUE	/	FALSE	1785130255	last_video_search	new
+.xhamster19.com	TRUE	/	FALSE	1816664462	settings	eyJpc1dlYnBTdXBwb3J0ZWQiOnRydWUsImlzV2VibVN1cHBvcnRlZCI6dHJ1ZSwiZXh0RGV0ZWN0ZWRWMiI6ZmFsc2UsIm1vbWVudHNJc0hpZGRlbiI6bnVsbCwidHJ1c3RVUkxzIjpbInhoYW1zdGVyMTkuY29tIl0sImlzU2lkZWJhckhpZGRlbiI6bnVsbCwiZXhwaXJlcyI6eyJ0cnVzdFVSTHMiOjE3ODUxMzU2NTgsImV4dERldGVjdGVkVjIiOjE3ODUxMjg0NjJ9LCJ0c1Nwb3RDb3VudGVycyI6W3sic3BvdCI6Im1hc3Rlcl9jdWJlIiwidGltZSI6MTc4NTEyODQ1MywiY291bnQiOjF9LHsic3BvdCI6Im1hc3Rlcl9mb290ZXIiLCJ0aW1lIjoxNzg1MTI4NDUzLCJjb3VudCI6MX1dfQ%3D%3D
+.xhamster19.com	TRUE	/	FALSE	1787720455	search_last_list	%5B%22new%22%5D
+.xhamster19.com	TRUE	/	TRUE	1787720501	_cfg	0d2ef32fe1da1c13d4fd6f172ba5599c
+.xhamster19.com	TRUE	/	FALSE	0	x_csrf_token	1
+.xhamster19.com	TRUE	/	FALSE	1816664459	parental-control	yes
+.xhamster19.com	TRUE	/	TRUE	1816664479	_id	516d861417ad9cb698f811b3da4e322aac091270
+.xhamster19.com	TRUE	/	FALSE	1816664504	UID	377371408
+.xhamster19.com	TRUE	/	FALSE	1819688480	x_tgt	%7B%22login%22%3A%2227-07-2026%22%7D
+.xhamster19.com	TRUE	/	TRUE	1819688482	_ga_T40T5YFNVL	GS2.1.s1785128481$o1$g0$t1785128481$j60$l0$h1650839162
+.xhamster19.com	TRUE	/	TRUE	1819688482	_ga	GA1.1.533356184.1785128482
+.xhamster19.com	TRUE	/	FALSE	1816664493	moments_listing_ad_offset	1
+.xhamster19.com	TRUE	/	FALSE	1785733300	x_viewes	%5B26149458%5D
+.xhamster19.com	TRUE	/	FALSE	1787720500	x_content_preference_index	straight
+.xhamster19.com	TRUE	/	FALSE	1787720502	h_v4_straight	%7B%22v%22%3A%5B%5D%2C%22l%22%3A%5B%5D%2C%22f%22%3A%5B%5D%2C%22pv%22%3A%5B26149458%5D%7D
+.xhamster19.com	TRUE	/	TRUE	1785130243	x_preroll	1
+.xhamster19.com	TRUE	/	TRUE	1785130243	x_preroll_shown	1
 .xhamster46.desi	TRUE	/one-tap-auth/iframe	TRUE	1813387635	_id	5684d8fbfa3db9db41598d7aebf9560e7543bce4
 www.recaptcha.net	FALSE	/recaptcha	TRUE	1797403634	_GRECAPTCHA	09AKhCRwj2IQvIgOwaZ-lVYgwZmpYdjthlK4BEChxxElHMoubwB0UCqxuTFWxRjRvVUI-W58RTF9hHN3fqjc_WQsI
 .google.com	TRUE	/verify	TRUE	1800714314	SNID	AL3h32yIekNy9qAz9jOBsfG8ftvO5kmcsZgCOrPWrxz6-agkY7VIZ3K5N3EjjIYrJn2ssIPgKpUsk4TDXx6_XfruE_Cvj4R2kF4
