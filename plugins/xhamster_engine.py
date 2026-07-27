@@ -4,7 +4,7 @@
 #  - yt-dlp info extractor bypass
 #  - Finds plaintext/escaped/encrypted HLS
 #  - Builds h264 HLS quality URLs
-#  - 429 rate-limit fix: mirror rotation + retry + UA rotation
+#  - 429 fix: mirror rotation + retry + UA rotation + PROXY
 # ============================================================
 
 import re
@@ -13,6 +13,8 @@ import html as html_lib
 import logging
 import random
 import time
+import os
+import threading
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -20,7 +22,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# 429 FIX: Multiple User-Agents for rotation
+#  User-Agents pool for rotation
 # ============================================================
 _UA_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -37,12 +39,10 @@ _UA_POOL = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
 ]
 
-# Default UA (backward compat)
 UA = _UA_POOL[0]
 
 # ============================================================
-# 429 FIX: Mirror domains - har domain ka ALAG rate limit hota hai
-# Agar ek 429 deta hai toh doosra try karo!
+#  Mirror domains
 # ============================================================
 _MIRROR_HOSTS = [
     "xhamster46.desi",
@@ -56,16 +56,190 @@ _MIRROR_HOSTS = [
 ]
 
 # Retry config
-MAX_RETRIES_PER_DOMAIN = 2   # har domain pe max 2 baar try
+MAX_RETRIES_PER_DOMAIN = 2
 BASE_DELAY = 2
 MAX_DELAY = 20
-REQUEST_TIMEOUT = 30
-DOMAIN_SWITCH_DELAY = 1.5    # domain switch pe chhota delay
+REQUEST_TIMEOUT = 25
+DOMAIN_SWITCH_DELAY = 1.0
+
+# ============================================================
+#  FREE PROXY POOL - IP block ka permanent solution!
+#  GitHub se maintained proxy lists fetch karo
+# ============================================================
+_PROXY_SOURCES = [
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+    "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt",
+]
+
+_PROXY_CACHE_FILE = os.path.join(
+    os.environ.get("BIMBO_DOWNLOAD_LOCATION", "/tmp"),
+    "xh_proxy_cache.txt"
+)
+_PROXY_CACHE_MAX_AGE = 3600   # 1 hour cache
+_PROXY_TEST_TIMEOUT = 5       # 5 sec me proxy test karo
+_PROXY_FETCH_TIMEOUT = 10     # proxy list fetch timeout
+_MAX_PROXIES_IN_POOL = 200    # max proxies rakho pool me
+_MAX_WORKING_PROXIES = 15     # max working proxies test karo
+
+# Global proxy state (thread-safe)
+_proxy_lock = threading.Lock()
+_proxy_pool = []               # list of working proxy strings "ip:port"
+_proxy_last_refresh = 0       # timestamp of last refresh
+_proxy_raw_cache = []          # raw (untested) proxies from GitHub
+
 
 def _random_ua():
-    """Har request pe alag User-Agent do"""
     return random.choice(_UA_POOL)
 
+
+def _download_proxy_list():
+    """GitHub se fresh proxy list download karo."""
+    all_proxies = set()
+    for src in _PROXY_SOURCES:
+        try:
+            r = requests.get(src, timeout=_PROXY_FETCH_TIMEOUT,
+                           headers={"User-Agent": _random_ua()})
+            if r.status_code == 200:
+                lines = r.text.strip().splitlines()
+                for line in lines:
+                    line = line.strip()
+                    # Basic validation: ip:port format
+                    if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}$', line):
+                        all_proxies.add(line)
+                logger.info("xhamster proxy: fetched %d from %s", len(lines), src[:60])
+        except Exception as e:
+            logger.warning("xhamster proxy: fetch failed %s: %s", src[:50], e)
+
+    proxies = list(all_proxies)
+    random.shuffle(proxies)
+    return proxies[:_MAX_PROXIES_IN_POOL]
+
+
+def _test_proxy(proxy_str, test_url="https://xhamster.com"):
+    """Ek proxy ko test karo - kya yeh xhamster tak pahunch sakta hai?"""
+    try:
+        proxies = {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"}
+        r = requests.head(
+            test_url,
+            proxies=proxies,
+            timeout=_PROXY_TEST_TIMEOUT,
+            headers={"User-Agent": _random_ua()},
+            allow_redirects=True,
+        )
+        # 200, 301, 302, 403 sab theek hain - 429 nahi hona chahiye
+        if r.status_code in (200, 301, 302, 303, 307, 308, 403):
+            return True
+        if r.status_code == 429:
+            return False  # proxy bhi rate limited hai
+        # Other errors
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _refresh_proxy_pool(force=False):
+    """Proxy pool refresh karo - cache se ya fresh download."""
+    global _proxy_pool, _proxy_last_refresh, _proxy_raw_cache
+
+    now = time.time()
+
+    with _proxy_lock:
+        # Cache valid hai toh mat refresh karo
+        if not force and _proxy_pool and (now - _proxy_last_refresh) < _PROXY_CACHE_MAX_AGE:
+            return
+
+        # Check file cache first
+        if not force and os.path.exists(_PROXY_CACHE_FILE):
+            try:
+                mtime = os.path.getmtime(_PROXY_CACHE_FILE)
+                if (now - mtime) < _PROXY_CACHE_MAX_AGE:
+                    with open(_PROXY_CACHE_FILE, "r") as f:
+                        cached = [l.strip() for l in f if l.strip()]
+                    if cached:
+                        _proxy_pool = cached
+                        _proxy_last_refresh = now
+                        logger.info("xhamster proxy: loaded %d from cache file", len(cached))
+                        return
+            except Exception:
+                pass
+
+    # Fresh download (outside lock for network I/O)
+    logger.info("xhamster proxy: downloading fresh proxy list...")
+    raw_proxies = _download_proxy_list()
+
+    if not raw_proxies:
+        logger.warning("xhamster proxy: no proxies downloaded!")
+        return
+
+    # Test proxies (only test a subset to save time)
+    working = []
+    to_test = raw_proxies[:60]  # 60 proxies test karo, kaafi hain
+
+    logger.info("xhamster proxy: testing %d proxies...", len(to_test))
+    for proxy in to_test:
+        if len(working) >= _MAX_WORKING_PROXIES:
+            break
+        if _test_proxy(proxy):
+            working.append(proxy)
+            logger.info("xhamster proxy: WORKING %s (%d/%d)",
+                       proxy, len(working), _MAX_WORKING_PROXIES)
+
+    with _proxy_lock:
+        if working:
+            _proxy_pool = working
+            _proxy_last_refresh = time.time()
+            # Save to cache file
+            try:
+                os.makedirs(os.path.dirname(_PROXY_CACHE_FILE), exist_ok=True)
+                with open(_PROXY_CACHE_FILE, "w") as f:
+                    f.write("\n".join(working))
+            except Exception:
+                pass
+            logger.info("xhamster proxy: %d working proxies ready!", len(working))
+        else:
+            logger.warning("xhamster proxy: NO working proxies found from %d tested", len(to_test))
+            # Keep old pool if available
+            if not _proxy_pool:
+                _proxy_pool = []
+
+
+def _get_proxy():
+    """Ek random working proxy lo pool se."""
+    with _proxy_lock:
+        if not _proxy_pool:
+            return None
+        proxy = random.choice(_proxy_pool)
+        return {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+
+
+def _remove_bad_proxy(proxy_dict):
+    """Jo proxy kaam nahi kar rahi usko pool se hatao."""
+    if not proxy_dict:
+        return
+    # Extract proxy string from dict
+    proxy_str = proxy_dict.get("http", "").replace("http://", "")
+    with _proxy_lock:
+        if proxy_str in _proxy_pool:
+            _proxy_pool.remove(proxy_str)
+            logger.info("xhamster proxy: removed bad proxy %s (%d remaining)",
+                       proxy_str, len(_proxy_pool))
+
+
+def _start_proxy_refresh():
+    """Background me proxy pool refresh karo (non-blocking)."""
+    def _bg_refresh():
+        try:
+            _refresh_proxy_pool()
+        except Exception as e:
+            logger.warning("xhamster proxy: background refresh error: %s", e)
+    t = threading.Thread(target=_bg_refresh, daemon=True)
+    t.start()
+
+
+# ============================================================
+#  xHamster detection
+# ============================================================
 _XH_BRANDS = (
     "xhamster", "xhms", "xhday", "xhvid", "xhwide", "xhwebcam",
     "xhopen", "xhtab", "xhtotal", "xhofficial", "xhaccess", "xhmoon",
@@ -102,7 +276,6 @@ def is_xhamster(url: str) -> bool:
 
 
 def _clean_xhamster_page_url(url: str) -> str:
-    """xHamster share URL se tracking query hatao."""
     url = html_lib.unescape(str(url or "").strip())
     m = re.search(r"https?://[^\s<>\"']+", url)
     if m:
@@ -113,6 +286,7 @@ def _clean_xhamster_page_url(url: str) -> str:
         return p._replace(query="", fragment="").geturl()
     except Exception:
         return url.split("?", 1)[0].split("#", 1)[0]
+
 
 def _to_desktop(url: str) -> str:
     return re.sub(r"^(https?://(?:.+?\.)?)m\.", r"\1", str(url or "").strip())
@@ -126,11 +300,7 @@ def _base_of(url: str) -> str:
         return "https://xhamster.com"
 
 
-# ============================================================
-# 429 FIX: URL ko multiple mirror domains pe convert karo
-# ============================================================
 def _get_mirror_urls(url: str):
-    """Ek URL se sabhi mirror URLs banao. Har mirror ka alag rate limit."""
     url = _clean_xhamster_page_url(_to_desktop(url))
     try:
         parsed = urlparse(url)
@@ -139,31 +309,22 @@ def _get_mirror_urls(url: str):
     except Exception:
         return [url]
 
-    # Sirf video pages ke liye mirrors try karo
     if "/videos/" not in path and "/movies/" not in path:
         return [url]
 
     mirror_urls = []
     seen = set()
 
-    # Pehle original URL (highest priority)
     if url not in seen:
         mirror_urls.append(url)
         seen.add(url)
 
-    # Phir sabhi mirrors
     for host in _MIRROR_HOSTS:
-        # Skip if this is the original host
-        if host == original_host or host.replace(".desi", "").replace(".com", "").replace(".one", "") == original_host.replace(".desi", "").replace(".com", "").replace(".one", ""):
-            # Already have original, but add if different TLD
-            pass
-
         mirror_url = f"https://{host}{path}"
         if mirror_url not in seen:
             mirror_urls.append(mirror_url)
             seen.add(mirror_url)
 
-    # Shuffle mirrors (except first) to distribute load
     if len(mirror_urls) > 2:
         rest = mirror_urls[1:]
         random.shuffle(rest)
@@ -200,36 +361,26 @@ def _find_m3u8_candidates(text: str):
 def _pick_best_master(candidates):
     if not candidates:
         return None
-
     def score(u):
         lu = u.lower()
         sc = 0
-        if "_tpl_" in lu:
-            sc += 100
-        if "hls" in lu:
-            sc += 40
-        if "h264" in lu:
-            sc += 30
-        if "av1" in lu:
-            sc += 10
-        if "multi=" in lu:
-            sc += 20
-        if "/seg-" in lu:
-            sc -= 100
+        if "_tpl_" in lu: sc += 100
+        if "hls" in lu: sc += 40
+        if "h264" in lu: sc += 30
+        if "av1" in lu: sc += 10
+        if "multi=" in lu: sc += 20
+        if "/seg-" in lu: sc -= 100
         return sc
-
     return sorted(candidates, key=score, reverse=True)[0]
 
 
 def _ytdlp_decipher():
-    """yt-dlp ka xHamster decipher reuse. Sirf encrypted HLS ke liye."""
     try:
         import yt_dlp
         from yt_dlp.extractor.xhamster import XHamsterIE
         ydl = yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True})
         ie = XHamsterIE()
         ie.set_downloader(ydl)
-
         def dec(u, fid="hls"):
             try:
                 return ie._decipher_format_url(u, fid)
@@ -250,7 +401,6 @@ def _extract_window_initials(html: str):
     start = html.find("{", idx)
     if start < 0:
         return None
-
     depth = 0
     in_str = False
     quote = ""
@@ -279,7 +429,6 @@ def _extract_window_initials(html: str):
                 break
     if end is None:
         return None
-
     raw = html[start:end]
     try:
         return json.loads(raw)
@@ -356,7 +505,6 @@ def _decipher_candidates(values):
 def _find_hls_from_initials(initials):
     if not isinstance(initials, dict):
         return None
-
     direct = []
     for val in _walk_strings(initials):
         if ".m3u8" in val or "m3u8" in val.lower():
@@ -455,14 +603,11 @@ def _load_netscape_cookies(cookies_file: str):
 
 
 def _candidate_video_urls_from_initials(initials, current_url: str):
-    """Limited/share page ke initials['urls'] ya kisi bhi nested value se playable video URLs nikalo."""
     out = []
-
     def add_clean(cand):
         cand = _clean_xhamster_page_url(cand)
         if cand and is_xhamster(cand) and ("/videos/" in cand or "/movies/" in cand) and cand not in out:
             out.append(cand)
-
     def add(u):
         if not isinstance(u, str):
             return
@@ -471,7 +616,6 @@ def _candidate_video_urls_from_initials(initials, current_url: str):
             cand = m.group(0).strip().strip("`'\"<>[]()")
             cand = cand.replace("&amp;", "&")
             add_clean(cand)
-
     if isinstance(initials, dict):
         urls_node = initials.get("urls")
         for val in _walk_strings(urls_node):
@@ -480,26 +624,16 @@ def _candidate_video_urls_from_initials(initials, current_url: str):
             p = path.lower()
             if isinstance(val, str) and any(w in p for w in ("url", "link", "fallback", "canonical", "pagehidden")):
                 add(val)
-
     cur = _clean_xhamster_page_url(current_url)
     add_clean(cur)
-
     try:
         parsed = urlparse(cur)
         path = parsed.path
         if "/videos/" in path or "/movies/" in path:
-            preferred_hosts = [
-                "xhamster46.desi",
-                "xhamster.desi",
-                "xhamster19.desi",
-                "xhamster.com",
-                "xhamster.one",
-            ]
-            for host in preferred_hosts:
+            for host in _MIRROR_HOSTS:
                 add_clean(f"https://{host}{path}")
     except Exception:
         pass
-
     out = [u for u in out if "/my/favorites/" not in u and "/watch-later" not in u]
     return out
 
@@ -519,7 +653,6 @@ def _has_player_data(html: str):
 
 
 def _title_has_cjk_or_japanese(text: str) -> bool:
-    """Japanese/Chinese/Korean title detect."""
     return any(
         ('\u3040' <= ch <= '\u30ff') or
         ('\u3400' <= ch <= '\u4dbf') or
@@ -530,7 +663,6 @@ def _title_has_cjk_or_japanese(text: str) -> bool:
 
 
 def _title_from_url_slug(page_url: str):
-    """URL slug se readable English-style title banao."""
     try:
         slug = urlparse(page_url).path.rstrip('/').split('/')[-1]
         if not slug:
@@ -548,7 +680,6 @@ def _title_from_url_slug(page_url: str):
 
 
 def _clean_title(title: str, page_url: str):
-    """Filename ke liye clean title; Japanese/localized title aaye to slug title use karo."""
     title = html_lib.unescape(str(title or '')).strip()
     title = re.sub(r'\s+', ' ', title)
     slug_title = _title_from_url_slug(page_url)
@@ -558,10 +689,29 @@ def _clean_title(title: str, page_url: str):
     return title or 'xHamster video'
 
 
+def _build_browser_headers(ua, page_url, page_base, cookie_header=None):
+    h = {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Referer": page_url,
+        "Origin": page_base,
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+    }
+    if cookie_header:
+        h["Cookie"] = cookie_header
+    return h
+
+
 def _extract_from_html(html: str, page_url: str):
     base = _base_of(page_url)
     ua = _random_ua()
-    headers = {"User-Agent": ua, "Referer": page_url, "Origin": base}
 
     title = None
     duration = None
@@ -588,8 +738,8 @@ def _extract_from_html(html: str, page_url: str):
 
     if not master:
         logger.warning(
-            "xhamster: master not found (initials_parsed=%s, m3u8_candidates=%s, top_keys=%s)",
-            isinstance(initials, dict), len(candidates), list(initials.keys())[:12] if isinstance(initials, dict) else []
+            "xhamster: master not found (initials_parsed=%s, m3u8_candidates=%s)",
+            isinstance(initials, dict), len(candidates)
         )
         return None
 
@@ -637,31 +787,6 @@ def _extract_from_html(html: str, page_url: str):
     }
 
 
-def _build_browser_headers(ua, page_url, page_base, cookie_header=None):
-    """Real browser jaisa headers banao."""
-    h = {
-        "User-Agent": ua,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,hi;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Referer": page_url,
-        "Origin": page_base,
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-        "sec-ch-ua": '"Chromium";v="126", "Google Chrome";v="126", "Not-A.Brand";v="8"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-    if cookie_header:
-        h["Cookie"] = cookie_header
-    return h
-
-
 def extract(url: str, cookies_file: str = None):
     desktop = _clean_xhamster_page_url(_to_desktop(url))
 
@@ -669,191 +794,210 @@ def extract(url: str, cookies_file: str = None):
     if cookie_header:
         logger.info("xhamster: cookies loaded count=%s", len(cookies or {}))
 
-    # ============================================================
-    # 429 FIX: MIRROR ROTATION STRATEGY
-    # Sabse pehle saare mirror domains banao, phir ek-ek try karo.
-    # Ek domain pe 429 aaye toh TURANT doosra domain try karo
-    # (kyunki har domain ka ALAG rate limit hota hai)
-    # ============================================================
     mirror_urls = _get_mirror_urls(desktop)
-    logger.info("xhamster: trying %d mirror domains for %s", len(mirror_urls), desktop[:80])
+    logger.info("xhamster: trying %d mirror domains", len(mirror_urls))
 
     session = requests.Session()
     tried = []
-    best_response = None
     best_html = None
     best_url = None
 
-    for mirror_idx, page_url in enumerate(mirror_urls[:5]):  # max 5 mirrors try
+    # ============================================================
+    #  PHASE 1: Direct requests (no proxy) with mirror rotation
+    # ============================================================
+    for mirror_idx, page_url in enumerate(mirror_urls[:5]):
         page_url = _clean_xhamster_page_url(page_url)
         page_base = _base_of(page_url)
 
         if page_url in tried:
             continue
 
-        success = False
         for attempt in range(MAX_RETRIES_PER_DOMAIN):
             ua = _random_ua()
             h = _build_browser_headers(ua, page_url, page_base, cookie_header)
 
-            # Small random delay before request
             if attempt == 0 and mirror_idx == 0:
-                time.sleep(random.uniform(0.5, 1.5))
+                time.sleep(random.uniform(0.3, 1.0))
             elif attempt > 0:
-                # Retry on same domain - exponential backoff
                 delay = BASE_DELAY * (2 ** attempt) + random.uniform(0.5, 2)
-                logger.info("xhamster: retry domain=%s attempt=%d delay=%.1fs",
-                           urlparse(page_url).hostname, attempt + 1, delay)
                 time.sleep(delay)
-                # New session for retry
                 session.close()
                 session = requests.Session()
                 ua = _random_ua()
                 h = _build_browser_headers(ua, page_url, page_base, cookie_header)
             else:
-                # Domain switch - short delay
-                time.sleep(random.uniform(0.3, DOMAIN_SWITCH_DELAY))
+                time.sleep(random.uniform(0.2, DOMAIN_SWITCH_DELAY))
 
             try:
-                r = session.get(
-                    page_url, headers=h, cookies=cookies,
-                    timeout=REQUEST_TIMEOUT, allow_redirects=True
-                )
-            except requests.exceptions.Timeout:
-                logger.warning("xhamster: timeout mirror=%s attempt=%d",
-                             urlparse(page_url).hostname, attempt + 1)
-                continue
-            except requests.exceptions.ConnectionError as ce:
-                logger.warning("xhamster: connection error mirror=%s: %s",
-                             urlparse(page_url).hostname, str(ce)[:80])
-                break  # try next mirror
+                r = session.get(page_url, headers=h, cookies=cookies,
+                              timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                logger.warning("xhamster: direct fetch error mirror=%s", urlparse(page_url).hostname)
+                break
             except Exception as e:
-                logger.warning("xhamster: fetch error mirror=%s: %s",
-                             urlparse(page_url).hostname, str(e)[:80])
-                break  # try next mirror
-
-            status = r.status_code
-            tried.append(page_url)
-
-            # ============================================================
-            # 429 HANDLING
-            # ============================================================
-            if status == 429:
-                retry_after = r.headers.get("Retry-After")
-                if retry_after:
-                    try:
-                        wait_time = int(retry_after)
-                    except ValueError:
-                        wait_time = BASE_DELAY * (2 ** (attempt + 1))
-                else:
-                    wait_time = BASE_DELAY * (2 ** (attempt + 1)) + random.uniform(1, 3)
-
-                logger.warning(
-                    "xhamster: 429 on %s (attempt %d/%d), wait=%.1fs -> switching mirror",
-                    urlparse(page_url).hostname, attempt + 1, MAX_RETRIES_PER_DOMAIN, wait_time
-                )
-                # Is domain pe dobara try nahi karna agar bahut 429 aa raha hai
-                # TURANT next mirror try karo (different domain = different rate limit)
-                if attempt >= MAX_RETRIES_PER_DOMAIN - 1:
-                    # Exhausted retries on this domain, break and try next mirror
-                    break
-                continue
-
-            # 403 = possible Cloudflare block
-            if status == 403:
-                logger.warning("xhamster: 403 on %s -> trying next mirror",
-                             urlparse(page_url).hostname)
-                break  # try next mirror
-
-            # 200 = SUCCESS (ya koi aur non-error status)
-            if status == 200:
-                html_text = r.text
-                if not html_text:
-                    logger.warning("xhamster: empty html from %s", urlparse(page_url).hostname)
-                    break
-
-                # Check if video is closed/removed
-                if re.search(r"videoClosed", html_text):
-                    logger.info("xhamster: video closed/removed on %s", urlparse(page_url).hostname)
-                    # Try next mirror - shayad doosre pe available ho
-                    break
-
-                # Check if this is a limited page (no player data)
-                has_player, initials0 = _has_player_data(html_text)
-
-                if has_player:
-                    # GOT PLAYER DATA! This is the good response
-                    logger.info("xhamster: SUCCESS mirror=%s html_len=%d has_player=True",
-                              urlparse(page_url).hostname, len(html_text))
-                    best_response = r
-                    best_html = html_text
-                    best_url = page_url
-                    success = True
-                    break
-                else:
-                    # Limited page - save it but keep trying for a better response
-                    logger.info("xhamster: limited page from %s, trying next mirror",
-                              urlparse(page_url).hostname)
-                    if best_html is None:
-                        best_response = r
-                        best_html = html_text
-                        best_url = page_url
-
-                    # Check if initials have candidate video URLs
-                    candidates_from_initials = _candidate_video_urls_from_initials(initials0, page_url)
-                    # Don't try these as separate mirrors - they're already in our mirror list
-                    break  # try next mirror
-            else:
-                # Some other error status
-                logger.warning("xhamster: status %d from %s", status, urlparse(page_url).hostname)
+                logger.warning("xhamster: direct fetch error: %s", str(e)[:80])
                 break
 
-        if success:
-            break  # We got a good response, stop trying mirrors
+            tried.append(page_url)
 
-    # ============================================================
-    # POST-PROCESSING
-    # ============================================================
-    if best_html is None:
-        logger.error("xhamster: ALL mirrors failed (tried %d URLs)", len(tried))
-        return None
+            if r.status_code == 429:
+                logger.warning("xhamster: 429 on %s -> next mirror", urlparse(page_url).hostname)
+                break
 
-    # If the best response was a limited page, try candidate URLs from initials
-    has_player, initials0 = _has_player_data(best_html)
-    if not has_player:
-        candidates = _candidate_video_urls_from_initials(initials0, best_url)
-        logger.info("xhamster: limited page fallback, %d candidate URLs", len(candidates))
-        for cand in candidates:
-            if cand in tried:
-                continue
-            try:
-                ua = _random_ua()
-                page_base = _base_of(cand)
-                h = _build_browser_headers(ua, cand, page_base, cookie_header)
-                time.sleep(random.uniform(0.5, 1.5))
-                rr = session.get(cand, headers=h, cookies=cookies,
-                               timeout=REQUEST_TIMEOUT, allow_redirects=True)
-                if rr.status_code in (429, 403):
-                    logger.warning("xhamster: candidate %s -> %d, skip", urlparse(cand).hostname, rr.status_code)
-                    continue
-                hh = rr.text
-                tried.append(cand)
-                ok, _ = _has_player_data(hh)
-                logger.info("xhamster: candidate url=%s status=%s html_len=%s player=%s",
-                          cand[:80], rr.status_code, len(hh or ""), ok)
-                if ok:
-                    best_response, best_html, best_url = rr, hh, cand
+            if r.status_code == 403:
+                logger.warning("xhamster: 403 on %s -> next mirror", urlparse(page_url).hostname)
+                break
+
+            if r.status_code == 200 and r.text:
+                if re.search(r"videoClosed", r.text):
                     break
+                has_player, initials0 = _has_player_data(r.text)
+                if has_player:
+                    logger.info("xhamster: SUCCESS direct mirror=%s", urlparse(page_url).hostname)
+                    best_html = r.text
+                    best_url = page_url
+                    break
+                else:
+                    if best_html is None:
+                        best_html = r.text
+                        best_url = page_url
+                    break
+            else:
+                break
+
+        if best_html and _has_player_data(best_html)[0]:
+            break
+
+    # ============================================================
+    #  PHASE 2: PROXY fallback (agar sab direct mirrors fail)
+    # ============================================================
+    if not best_html or not _has_player_data(best_html)[0]:
+        logger.info("xhamster: direct failed, trying PROXY route...")
+
+        # Background me proxy refresh start karo (agar pool empty)
+        _start_proxy_refresh()
+
+        # Thoda wait karo proxies load hone ka
+        time.sleep(2)
+        _refresh_proxy_pool()
+
+        # Proxy se try karo
+        proxy_attempts = 0
+        MAX_PROXY_ATTEMPTS = 8
+
+        while proxy_attempts < MAX_PROXY_ATTEMPTS:
+            proxy = _get_proxy()
+            if not proxy:
+                logger.warning("xhamster: no proxies available in pool!")
+                # Try to refresh one more time
+                _refresh_proxy_pool(force=True)
+                proxy = _get_proxy()
+                if not proxy:
+                    break
+
+            # Random mirror choose karo proxy ke liye
+            page_url = random.choice(mirror_urls[:4])
+            page_url = _clean_xhamster_page_url(page_url)
+            page_base = _base_of(page_url)
+            ua = _random_ua()
+            h = _build_browser_headers(ua, page_url, page_base, cookie_header)
+
+            proxy_str = proxy.get("http", "").replace("http://", "")
+            logger.info("xhamster: proxy attempt %d/%d proxy=%s mirror=%s",
+                       proxy_attempts + 1, MAX_PROXY_ATTEMPTS,
+                       proxy_str, urlparse(page_url).hostname)
+
+            try:
+                # Naya session for proxy (no cookie leak)
+                ps = requests.Session()
+                r = ps.get(
+                    page_url, headers=h, cookies=cookies,
+                    proxies=proxy, timeout=15, allow_redirects=True
+                )
+                ps.close()
+            except requests.exceptions.ProxyError:
+                logger.warning("xhamster: proxy error %s", proxy_str)
+                _remove_bad_proxy(proxy)
+                proxy_attempts += 1
+                continue
+            except requests.exceptions.Timeout:
+                logger.warning("xhamster: proxy timeout %s", proxy_str)
+                _remove_bad_proxy(proxy)
+                proxy_attempts += 1
+                continue
             except Exception as e:
-                logger.warning("xhamster: candidate retry failed url=%s err=%s", cand[:60], e)
+                logger.warning("xhamster: proxy fetch error %s: %s", proxy_str, str(e)[:60])
+                _remove_bad_proxy(proxy)
+                proxy_attempts += 1
+                continue
+
+            proxy_attempts += 1
+
+            if r.status_code == 429:
+                logger.warning("xhamster: proxy %s also got 429, removing", proxy_str)
+                _remove_bad_proxy(proxy)
+                continue
+
+            if r.status_code in (403, 500, 502, 503):
+                logger.warning("xhamster: proxy %s got %d, removing", proxy_str, r.status_code)
+                _remove_bad_proxy(proxy)
+                continue
+
+            if r.status_code == 200 and r.text:
+                if re.search(r"videoClosed", r.text):
+                    continue
+                has_player, _ = _has_player_data(r.text)
+                if has_player:
+                    logger.info("xhamster: SUCCESS via proxy=%s mirror=%s",
+                              proxy_str, urlparse(page_url).hostname)
+                    best_html = r.text
+                    best_url = page_url
+                    break
+                else:
+                    if best_html is None:
+                        best_html = r.text
+                        best_url = page_url
+
+            time.sleep(random.uniform(0.5, 1.5))
+
+    # ============================================================
+    #  POST-PROCESSING: candidate URLs from initials
+    # ============================================================
+    if best_html:
+        has_player, initials0 = _has_player_data(best_html)
+        if not has_player:
+            candidates = _candidate_video_urls_from_initials(initials0, best_url)
+            logger.info("xhamster: limited page, %d candidates", len(candidates))
+            for cand in candidates[:3]:
+                if cand in tried:
+                    continue
+                try:
+                    ua = _random_ua()
+                    h = _build_browser_headers(ua, cand, _base_of(cand), cookie_header)
+                    time.sleep(random.uniform(0.3, 1.0))
+                    rr = session.get(cand, headers=h, cookies=cookies,
+                                   timeout=REQUEST_TIMEOUT, allow_redirects=True)
+                    if rr.status_code in (429, 403):
+                        continue
+                    if rr.status_code == 200 and rr.text:
+                        ok, _ = _has_player_data(rr.text)
+                        if ok:
+                            best_html, best_url = rr.text, cand
+                            break
+                except Exception:
+                    pass
+
+    # ============================================================
+    #  EXTRACT
+    # ============================================================
+    if not best_html:
+        logger.error("xhamster: ALL methods failed (direct + proxy)")
+        return None
 
     try:
         res = _extract_from_html(best_html, best_url)
         if not res:
-            logger.warning(
-                "xhamster: no m3u8 found; final_url=%s html_len=%s has_initials=%s tried=%s",
-                best_url, len(best_html), "window.initials" in best_html, tried[-5:]
-            )
+            logger.warning("xhamster: extraction failed final_url=%s", best_url[:80])
         return res
     except Exception as e:
         logger.warning("xh extract error: %s", e)
